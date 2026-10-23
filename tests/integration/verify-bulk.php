@@ -73,6 +73,20 @@ try {
 	$check( is_array( $o ) && $o['deep']['url'] === $new_full && 5 === $o['n'], 'serialized option rewritten and still valid' );
 	$check( get_post_meta( $post_id, 'lean_verify_lookalike', true ) === $lookalike, 'lookalike URL with a different base name untouched' );
 
+	// Lock: a step while another request holds the lock does nothing and reports busy; a stale lock is taken over.
+	$plugin->bulk->start( false, true, array( $att_id ) );
+	add_option( LeanUploads\Bulk::LOCK, time(), '', false );
+	$s = $plugin->bulk->step();
+	$check( ! empty( $s['busy'] ) && 0 === $s['cursor'], 'step reports busy and does nothing while the lock is held' );
+	update_option( LeanUploads\Bulk::LOCK, time() - LeanUploads\Bulk::LOCK_STALE_SEC - 1, false );
+	$s = $plugin->bulk->step();
+	$check( empty( $s['busy'] ) && 'done' === $s['status'] && false === get_option( LeanUploads\Bulk::LOCK ), 'a stale lock is taken over and released afterwards' );
+	// Recovery: an item left in flight by a request that died is counted as failed, not retried forever.
+	$plugin->bulk->start( false, true, array( $att_id ) );
+	$st = get_option( LeanUploads\Bulk::OPTION ); $st['in_flight'] = 999999999; update_option( LeanUploads\Bulk::OPTION, $st, false );
+	$s = $plugin->bulk->step();
+	$check( 1 === $s['failed'] && 0 === $s['in_flight'] && 'done' === $s['status'] && false !== strpos( implode( ' ', $s['log'] ), '#999999999 failed' ), 'an item left in flight by a dead request is reported as failed once' );
+
 	// Pause/resume/reset state machine.
 	$plugin->bulk->start( false, true, array( $att_id ) );
 	$s = $plugin->bulk->pause();  $check( 'paused' === $s['status'], 'pause' );
@@ -86,6 +100,7 @@ try {
 	if ( $att_id && 0 === strpos( get_the_title( $att_id ), 'lean-verify-' ) ) { $f = get_attached_file( $att_id, true ); wp_delete_attachment( $att_id, true ); $log( "deleted attachment #$att_id; leftover files: " . count( (array) glob( dirname( (string) $f ) . '/lean-verify-b*' ) ) ); }
 	delete_option( $opt );
 	if ( null === $bulk_before ) { delete_option( LeanUploads\Bulk::OPTION ); } else { update_option( LeanUploads\Bulk::OPTION, $bulk_before, false ); }
+	delete_option( LeanUploads\Bulk::LOCK );
 	if ( $tmp && file_exists( $tmp ) ) { wp_delete_file( $tmp ); }
 }
 if ( $fail ) { WP_CLI::error( "$fail check(s) failed." ); }

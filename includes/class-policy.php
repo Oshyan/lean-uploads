@@ -146,6 +146,56 @@ final class Policy {
 	}
 
 	/**
+	 * A file name whose base is free for its own extension and for every extension in $protect, considering the
+	 * full-size name, "-WxH" sub-sizes and core's "-scaled"/"-rotated" variants. Core's wp_unique_filename() only
+	 * checks the uploaded extension, so a new "photo.jpg" would otherwise reuse the base of an earlier upload that
+	 * this plugin already turned into "photo.webp" + "photo-300x200.webp", and core's editors would then write the
+	 * new thumbnails over the old ones (they never check for existing files).
+	 *
+	 * @param string   $filename Proposed name, e.g. "photo.jpg".
+	 * @param string[] $existing Names already in the directory (any case).
+	 * @param string[] $protect  Extensions to keep clear as well, e.g. array( 'webp', 'avif' ).
+	 * @return string The same name, or "photo-N.jpg" with the first free N.
+	 */
+	public static function free_name( string $filename, array $existing, array $protect ): string {
+		$dot  = strrpos( $filename, '.' );
+		$base = false === $dot ? $filename : substr( $filename, 0, $dot );
+		$ext  = false === $dot ? '' : substr( $filename, $dot ); // includes the dot
+		$exts = array_unique( array_filter( array_merge( array( strtolower( ltrim( $ext, '.' ) ) ), array_map( 'strtolower', $protect ) ) ) );
+		if ( empty( $exts ) || empty( $existing ) ) {
+			return $filename;
+		}
+		$names = array();
+		foreach ( $existing as $name ) {
+			$names[ strtolower( (string) $name ) ] = true;
+		}
+		$taken = static function ( string $candidate ) use ( $names, $exts ): bool {
+			$q = preg_quote( strtolower( $candidate ), '#' );
+			$e = '(?:' . implode( '|', array_map( 'preg_quote', $exts ) ) . ')';
+			foreach ( $exts as $x ) {
+				if ( isset( $names[ strtolower( $candidate ) . '.' . $x ] ) ) {
+					return true;
+				}
+			}
+			foreach ( array_keys( $names ) as $n ) {
+				if ( preg_match( '#^' . $q . '-(?:\d+x\d+|scaled|rotated)\.' . $e . '$#', $n ) ) {
+					return true;
+				}
+			}
+			return false;
+		};
+		if ( ! $taken( $base ) ) {
+			return $filename;
+		}
+		for ( $i = 1; $i < 10000; $i++ ) { // like core: append "-N", never rewrite a "-N" the user typed
+			if ( ! $taken( $base . '-' . $i ) ) {
+				return $base . '-' . $i . $ext;
+			}
+		}
+		return $base . '-' . substr( md5( uniqid( '', true ) ), 0, 8 ) . $ext;
+	}
+
+	/**
 	 * Cheap animated-GIF detection: more than one Graphic Control Extension block.
 	 */
 	public static function is_animated_gif( string $path ): bool {
@@ -159,7 +209,7 @@ final class Policy {
 			// Carry the last bytes of the previous chunk so a marker straddling the boundary is still seen.
 			$chunk  = $tail . fread( $fh, 1024 * 100 );
 			$count += preg_match_all( '#\x00\x21\xF9\x04.{4}\x00[\x2C\x21]#s', $chunk );
-			$tail   = substr( $chunk, -10 );
+			$tail   = substr( $chunk, -9 ); // one byte short of the 10-byte pattern, so a marker is never counted twice
 		}
 		fclose( $fh );
 		return $count > 1;

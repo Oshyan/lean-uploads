@@ -71,7 +71,11 @@ It uses WordPress's own image editor for the actual encoding, so it behaves the 
 - Originals are only removed for attachments the plugin was explicitly handed: new uploads, and attachments you convert through its own Media Library actions or WP-CLI command. Regenerations triggered any other way (core's own "create image subsizes" request, regeneration plugins, `wp media regenerate`) get thumbnails in the output format but never lose their original. That matters because core lets any user who can upload files trigger a regeneration of any attachment.
 - Every delete and rename is confined to the uploads directory, and file names from attachment metadata are reduced to their base name before use.
 - Target file names are claimed exclusively before anything is renamed over them, so two uploads differing only by extension cannot overwrite each other.
-- Bulk conversion is a transaction per attachment: if regeneration comes back incomplete, the previous metadata is restored and no file is deleted.
+- A new upload never reuses the base name of an earlier upload that was converted. Core only checks for existing files with the uploaded extension, so without this a second `photo.jpg` would get its thumbnails written over the first one's `photo-300x200.webp`.
+- An oversized original is moved aside, not replaced, while its lossless stand-in is processed; a failed conversion puts it back byte-for-byte.
+- If no thumbnails can be made for a converted image, the original is kept beside it rather than deleted.
+- Bulk conversion is a transaction per attachment: if regeneration comes back incomplete, the previous metadata is restored and no file is deleted. A converted file that has become the only copy is never deleted either.
+- URL rewriting touches only URLs under the uploads URL, stops at name boundaries, walks serialized data with a bounded depth, and never unserializes anything. One known limit: a serialized blob pasted inside plain text (a shortcode attribute, say) is rewritten as text, which would leave its string lengths stale.
 - Failure notices show the file name only; technical detail goes to the error log (when `WP_DEBUG` is on) and the `lean_uploads_failed` action.
 
 ## What it doesn't do
@@ -87,7 +91,7 @@ composer install
 composer test
 ```
 
-Unit tests cover the decision logic and settings sanitization without needing a WordPress install. The integration test is `wp lean-uploads self-test` against a real site.
+Unit tests cover the decision logic, settings sanitization and the URL rewriter without needing a WordPress install. Against a real site there is `wp lean-uploads self-test`, plus two WP-CLI scripts in `tests/integration/` that exercise the upload, bulk and rewrite paths end to end (they create their own fixtures and delete only those).
 
 ## Status
 

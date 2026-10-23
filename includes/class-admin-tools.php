@@ -11,6 +11,9 @@ defined( 'ABSPATH' ) || exit;
 
 final class Admin_Tools {
 
+	/** Values printed inside the inline script never form a tag or a comment, whatever they contain. */
+	const JSON = JSON_HEX_TAG | JSON_HEX_AMP | JSON_HEX_APOS | JSON_HEX_QUOT;
+
 	const SLUG = 'lean-uploads';
 
 	/** @var Bulk */
@@ -64,18 +67,22 @@ final class Admin_Tools {
 		</div>
 		<script>
 		(function () {
-			var ajax = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ) ); ?>, nonce = <?php echo wp_json_encode( $nonce ); ?>, action = <?php echo wp_json_encode( Bulk::AJAX ); ?>;
-			var initial = <?php echo wp_json_encode( array_diff_key( $state, array( 'ids' => 1 ) ) ); ?>;
+			var ajax = <?php echo wp_json_encode( admin_url( 'admin-ajax.php' ), self::JSON ); ?>, nonce = <?php echo wp_json_encode( $nonce, self::JSON ); ?>, action = <?php echo wp_json_encode( Bulk::AJAX, self::JSON ); ?>;
+			var initial = <?php echo wp_json_encode( array_diff_key( $state, array( 'ids' => 1 ) ), self::JSON ); ?>;
 			var running = false, $ = function (id) { return document.getElementById(id); };
 			function fmt(b) { var u = ['B','KB','MB','GB'], i = 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return (i ? b.toFixed(1) : b) + ' ' + u[i]; }
 			function call(op, extra) {
 				var body = new URLSearchParams(Object.assign({ action: action, nonce: nonce, op: op }, extra || {}));
-				return fetch(ajax, { method: 'POST', credentials: 'same-origin', body: body }).then(function (r) { return r.json(); }).then(function (j) { if (!j.success) { throw new Error(j.data && j.data.message ? j.data.message : 'request failed'); } return j.data; });
+				return fetch(ajax, { method: 'POST', credentials: 'same-origin', body: body }).then(function (r) {
+					if (r.status === 403) { throw new Error(<?php echo wp_json_encode( __( 'your session expired; reload the page, then click Resume', 'lean-uploads' ), self::JSON ); ?>); }
+					if (r.status === 409) { throw new Error(<?php echo wp_json_encode( __( 'another tab is already running this; pause it there, or wait and click Resume', 'lean-uploads' ), self::JSON ); ?>); }
+					return r.json();
+				}).then(function (j) { if (!j.success) { throw new Error(j.data && j.data.message ? j.data.message : 'request failed'); } return j.data; });
 			}
 			function show(state) {
 				var pct = state.total ? Math.round(100 * state.cursor / state.total) : 0;
 				$('lu-bar').style.width = pct + '%';
-				$('lu-counts').textContent = state.status + ': ' + state.cursor + ' / ' + state.total + ' processed, ' + state.done + ' converted, ' + state.skipped + ' skipped, ' + state.failed + ' failed, ' + fmt(state.saved) + ' saved' + (state.dry ? ' (dry run)' : '');
+				$('lu-counts').textContent = state.status + ': ' + state.cursor + ' / ' + state.total + ' processed, ' + state.done + (state.dry ? ' would convert, ' : ' converted, ') + state.skipped + ' skipped, ' + state.failed + ' failed, ' + fmt(state.saved) + ' saved' + (state.dry ? ' (dry run)' : '');
 				$('lu-log').textContent = (state.log || []).join('\n');
 				$('lu-log').scrollTop = $('lu-log').scrollHeight;
 				$('lu-start').disabled = state.status === 'running';
@@ -100,7 +107,7 @@ final class Admin_Tools {
 				}).catch(function (e) { $('lu-scan-status').textContent = e.message; });
 			};
 			$('lu-start').onclick = function () {
-				if (!$('lu-dry').checked && !window.confirm(<?php echo wp_json_encode( __( 'This will replace original image files in the Media Library. Continue?', 'lean-uploads' ) ); ?>)) { return; }
+				if (!$('lu-dry').checked && !window.confirm(<?php echo wp_json_encode( __( 'This will replace original image files in the Media Library. Continue?', 'lean-uploads' ), self::JSON ); ?>)) { return; }
 				call('start', { rewrite: $('lu-rewrite').checked ? 1 : 0, dry: $('lu-dry').checked ? 1 : 0 }).then(function (d) { show(d.state); running = d.state.status === 'running'; loop(); });
 			};
 			$('lu-pause').onclick = function () { running = false; call('pause').then(function (d) { show(d.state); }); };

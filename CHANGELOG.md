@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.1
+
+Second security review; everything it found is fixed here.
+
+- a new upload whose base name matches an earlier upload that was converted (say, a second `photo.jpg` in the same month after the first became `photo.webp`) now gets a numbered name; core only checks the uploaded extension, so its thumbnails would have overwritten the first attachment's
+- an oversized original is moved aside while the lossless intermediate stands in for it, and put back byte-for-byte if the conversion fails; before, a failed attempt left a downscaled PNG under the original's name
+- when no thumbnails can be generated for a converted image, the original is kept beside it (core's own "-scaled" arrangement) instead of being deleted; bulk conversion also never deletes a converted file that has become the only copy
+- bulk conversion of a legacy attachment that core had scaled converts from the true original rather than the lossy "-scaled" copy, and cleans up both afterwards
+- URL rewriting: nesting depth is bounded, values with surrounding whitespace are treated as serialized (as WordPress does), PHP enum tokens pass through, replacement stops at a name boundary (`.../x` no longer touches `.../xylophone.jpg`, `photo.jpg.webp` siblings are left alone), only URLs under the uploads URL are ever rewritten, tables are scanned in pages, and JSON-escaped (`\/`) forms of the URLs are rewritten too
+- bulk runs take a lock so two tabs cannot process the same attachment at once; progress is saved per attachment, and an attachment a dead request left unfinished is reported as failed once instead of retried forever
+- the unique-name move before bulk conversion claims its target exclusively; a WebP or AVIF file that only needs resizing keeps its name instead of being renamed to "-1"
+- animated GIF detection no longer counts a frame marker twice when it ends exactly on a read boundary
+- mime type updates write the one column instead of re-saving the attachment through the content filters
+- Tools page: JSON printed into the inline script is HTML-safe whatever it contains; clearer messages for an expired session or a run already active in another tab
+
 ## 0.3.0
 
 - Tools > Lean Uploads: scan the library, convert it in batches from the browser with progress, pause/resume and dry run (administrators only)

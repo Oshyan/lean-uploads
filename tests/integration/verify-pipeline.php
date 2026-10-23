@@ -66,7 +66,61 @@ try {
 	$leftovers = glob( dirname( $f ) . '/lean-verify-a*.jpg' );
 	$check( empty( $leftovers ), 'no JPEG files left for the fixture' );
 
-	// ---- 4. Per-format quality plumbing.
+	// ---- 4. A second upload with the same base name must not reuse the base of a converted earlier upload
+	//         (its thumbnails would otherwise overwrite the first attachment's; core only checks the uploaded extension).
+	$tmp_b = $mk_png( wp_tempnam( 'lean-verify-a' ), 1200, 800 ); // same visual content, different file
+	$id_b  = media_handle_sideload( array( 'name' => 'lean-verify-a.png', 'tmp_name' => $tmp_b ), 0 );
+	if ( is_wp_error( $id_b ) ) { throw new RuntimeException( 'second sideload failed: ' . $id_b->get_error_message() ); }
+	$made[] = $id_b;
+	$fb = get_attached_file( $id_b, true ); $mb = wp_get_attachment_metadata( $id_b );
+	$log( 'second upload: ' . $describe( $id_b ) );
+	$check( pathinfo( $fb, PATHINFO_FILENAME ) !== pathinfo( $f, PATHINFO_FILENAME ), 'second upload got a different base name (' . basename( $fb ) . ')' );
+	$first_sizes = array(); foreach ( (array) ( $m['sizes'] ?? array() ) as $sz ) { $first_sizes[ $sz['file'] ] = md5_file( dirname( $f ) . '/' . $sz['file'] ); }
+	$second_files = array_map( static function ( $sz ) { return $sz['file']; }, (array) ( $mb['sizes'] ?? array() ) );
+	$check( ! array_intersect( array_keys( $first_sizes ), $second_files ), 'no thumbnail file name is shared between the two attachments' );
+	$same = true; foreach ( $first_sizes as $name => $hash ) { if ( md5_file( dirname( $f ) . '/' . $name ) !== $hash ) { $same = false; } }
+	$check( $same, 'first attachment thumbnails are byte-for-byte unchanged' );
+
+	// ---- 5. Oversized Library conversion: the true original is moved aside while the lossless intermediate stands in,
+	//         then removed on success, with no stray working files left in the month directory.
+	add_filter( 'lean_uploads_settings', $off ); $reset_settings_cache();
+	$tmp_c = $mk_png( wp_tempnam( 'lean-verify-c' ), 3200, 2100 );
+	$id_c  = media_handle_sideload( array( 'name' => 'lean-verify-c.jpg', 'tmp_name' => $tmp_c ), 0 );
+	remove_filter( 'lean_uploads_settings', $off ); $reset_settings_cache();
+	if ( is_wp_error( $id_c ) ) { throw new RuntimeException( 'third sideload failed: ' . $id_c->get_error_message() ); }
+	$made[] = $id_c;
+	$dir_c  = dirname( get_attached_file( $id_c, true ) );
+	$strays = static function () use ( $dir_c ) { return array_merge( (array) glob( $dir_c . '/*.lean-tmp.png' ), (array) glob( $dir_c . '/*.lean-original' ) ); };
+	// 5a. Force a failure after the intermediate is in place (the converter refuses the full-size encode) and expect
+	//     the original back, byte-identical, with nothing else changed.
+	$orig_c = get_attached_file( $id_c, true ); $hash_c = md5_file( $orig_c ); $meta_c = wp_get_attachment_metadata( $id_c );
+	$true_c = $dir_c . '/' . wp_basename( (string) ( $meta_c['original_image'] ?? '' ) ); $hash_true = file_exists( $true_c ) ? md5_file( $true_c ) : '';
+	$check( '' !== $hash_true, 'fixture has a core-scaled copy plus the true original (' . basename( $true_c ) . ')' );
+	// The intermediate is written by Imagick directly; everything after it (core's sub-sizes, the plugin's own
+	// full-size encode) goes through WordPress image editors, so removing the editors fails exactly that stage.
+	$no_editors = static function () { return array(); };
+	add_filter( 'wp_image_editors', $no_editors, 1000 );
+	$r = $plugin->library->convert_attachment( $id_c, false );
+	remove_filter( 'wp_image_editors', $no_editors, 1000 );
+	clearstatcache();
+	$log( 'forced failure: ' . ( is_wp_error( $r ) ? 'ERR ' . $r->get_error_code() : 'unexpected success' ) . ' / ' . $describe( $id_c ) );
+	$check( is_wp_error( $r ), 'forced oversized conversion failed as intended' );
+	$check( file_exists( $orig_c ) && md5_file( $orig_c ) === $hash_c, 'scaled copy untouched after the failed attempt' );
+	$check( file_exists( $true_c ) && md5_file( $true_c ) === $hash_true, 'true original is back, byte-identical, after the failed attempt' );
+	$check( get_attached_file( $id_c, true ) === $orig_c && 'image/jpeg' === get_post_mime_type( $id_c ) && wp_get_attachment_metadata( $id_c ) == $meta_c, 'attachment file, mime and metadata unchanged after the failed attempt' );
+	$check( empty( $strays() ), 'no working files left after the failed attempt' );
+	// 5b. The real conversion.
+	$r = $plugin->library->convert_attachment( $id_c, false );
+	$log( 'oversized conversion: ' . ( is_wp_error( $r ) ? 'ERR ' . $r->get_error_message() : $describe( $id_c ) ) );
+	$check( ! is_wp_error( $r ), 'oversized conversion succeeded' );
+	$mc = wp_get_attachment_metadata( $id_c );
+	$check( 'image/webp' === get_post_mime_type( $id_c ) && max( (int) $mc['width'], (int) $mc['height'] ) <= (int) $plugin->settings->get()['max_dimension'], 'oversized image is WebP within the cap' );
+	// The fixture was stored by core as "-scaled.jpg" + the true original; the conversion must come from the original
+	// (so one encode from the source, not two) and leave neither the scaled copy nor the original behind.
+	$check( 'lean-verify-c.webp' === basename( get_attached_file( $id_c, true ) ), 'converted from the true original and named after it (' . basename( get_attached_file( $id_c, true ) ) . ')' );
+	$check( ! file_exists( $orig_c ) && empty( glob( $dir_c . '/lean-verify-c*.jpg' ) ) && empty( $strays() ), 'scaled copy and original removed, no working files left after success' );
+
+	// ---- 6. Per-format quality plumbing.
 	$q = $plugin->settings->quality_for( 'image/webp' ); $qa = $plugin->settings->quality_for( 'image/avif' );
 	$check( is_int( $q ) && is_int( $qa ) && $q !== $qa, "quality_for: webp=$q avif=$qa" );
 } catch ( Throwable $e ) {
@@ -84,7 +138,7 @@ try {
 			$log( "NOT deleting #$id: title '$t' is not ours" );
 		}
 	}
-	if ( isset( $tmp ) && file_exists( $tmp ) ) { wp_delete_file( $tmp ); }
+	foreach ( array( 'tmp', 'tmp_b', 'tmp_c' ) as $v ) { if ( isset( $$v ) && file_exists( $$v ) ) { wp_delete_file( $$v ); } }
 }
 if ( $fail ) { WP_CLI::error( "$fail check(s) failed." ); }
 WP_CLI::success( 'All verification checks passed.' );

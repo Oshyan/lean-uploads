@@ -124,11 +124,25 @@ final class Library {
 		require_once ABSPATH . 'wp-admin/includes/image.php';
 
 		$original  = $info['path'];
-		$old_name  = basename( $original );
 		$old_meta  = wp_get_attachment_metadata( $id );
 		$old_meta  = is_array( $old_meta ) ? $old_meta : array();
 		$old_urls  = $this->all_urls( wp_get_attachment_url( $id ), $old_meta );
 		$old_files = $this->all_files( $original, $old_meta );
+
+		/*
+		 * Core's own big-image handling leaves a lossy "-scaled" copy as the attachment's file and keeps the true
+		 * original beside it. Convert from the original (one encode from the source, as for a fresh upload) rather
+		 * than from the scaled JPEG; the scaled copy is cleaned up with the other old files on success.
+		 */
+		if ( ! empty( $old_meta['original_image'] ) ) {
+			$true_original = dirname( $original ) . '/' . wp_basename( $old_meta['original_image'] );
+			if ( $true_original !== $original && file_exists( $true_original ) && Pipeline::within_uploads( $true_original ) && wp_get_image_mime( $true_original ) ) {
+				$original = $true_original;
+				update_attached_file( $id, $original );
+			}
+		}
+		$old_name   = basename( $original );
+		$moved_from = '';
 
 		/*
 		 * Two pre-existing attachments can share a base name ("logo.jpg" and "logo.png" in the same month);
@@ -138,14 +152,22 @@ final class Library {
 		 */
 		$dir  = dirname( $original );
 		$want = Policy::rename( $old_name, $info['ext'] );
-		$uniq = wp_unique_filename( $dir, $want );
+		// A file that already has the target extension (a resize of a WebP) keeps its name: the only "collision"
+		// wp_unique_filename() would find is the file itself.
+		$uniq = $want === $old_name ? $want : wp_unique_filename( $dir, $want );
 		if ( pathinfo( $uniq, PATHINFO_FILENAME ) !== pathinfo( $original, PATHINFO_FILENAME ) ) {
 			$moved = $dir . '/' . pathinfo( $uniq, PATHINFO_FILENAME ) . '.' . pathinfo( $original, PATHINFO_EXTENSION );
-			if ( file_exists( $moved ) || ! Pipeline::within_uploads( $moved ) || ! rename( $original, $moved ) ) {
+			// claim() reserves the name exclusively; rename() over the placeholder cannot replace a concurrent upload.
+			if ( ! Pipeline::claim( $moved ) ) {
+				return new \WP_Error( 'lean_uploads_rename', 'Could not give the file a unique name before converting.' );
+			}
+			if ( ! rename( $original, $moved ) ) {
+				Pipeline::delete_in_uploads( $moved );
 				return new \WP_Error( 'lean_uploads_rename', 'Could not give the file a unique name before converting.' );
 			}
 			update_attached_file( $id, $moved );
-			$original = $moved;
+			$moved_from = $original;
+			$original   = $moved;
 		}
 
 		Pipeline::intend( $id );
@@ -158,6 +180,11 @@ final class Library {
 			// Not converting after all (regeneration incomplete, conversion failed, or the converted file would not
 			// have been smaller). Put the previous state back: remove any new files core produced that the old
 			// metadata does not reference, undo the unique-name move, restore the old metadata.
+			if ( ! file_exists( $original ) && ! file_exists( $info['path'] ) && $new_path && file_exists( $new_path ) ) {
+				// The original is gone and the new file is the only copy left: keep it, whatever it lacks.
+				wp_update_attachment_metadata( $id, $new_meta );
+				return new \WP_Error( 'lean_uploads_metadata', 'Converted, but WordPress could not generate thumbnails; the converted file was kept.' );
+			}
 			if ( is_array( $new_meta ) ) {
 				foreach ( $this->all_files( $new_path ?: $original, $new_meta ) as $new_file ) {
 					if ( $new_file !== $original && $new_file !== $info['path'] && ! in_array( $new_file, $old_files, true ) ) {
@@ -165,19 +192,20 @@ final class Library {
 					}
 				}
 			}
-			if ( $original !== $info['path'] && file_exists( $original ) ) {
-				rename( $original, $info['path'] ); // undo the unique-name move
-				update_attached_file( $id, $info['path'] );
+			if ( '' !== $moved_from && file_exists( $original ) ) {
+				rename( $original, $moved_from ); // undo the unique-name move
 			}
+			update_attached_file( $id, $info['path'] );
 			wp_update_attachment_metadata( $id, $old_meta );
 			return new \WP_Error( $complete ? 'skip' : 'lean_uploads_metadata', $complete ? 'converted file would not be smaller, or conversion failed (see admin notices)' : 'WordPress could not regenerate the image; nothing was changed' );
 		}
 		wp_update_attachment_metadata( $id, $new_meta );
 
-		// Remove old sub-size files the new set did not overwrite (the original itself was handled by the pipeline).
+		// Remove old files the new set did not overwrite: sub-sizes, and core's "-scaled" copy when the conversion
+		// ran from the true original. (The source file itself was handled by the pipeline.)
 		$keep = $this->all_files( $new_path, $new_meta );
 		foreach ( $old_files as $old ) {
-			if ( $old !== $info['path'] && $old !== $original && ! in_array( $old, $keep, true ) ) {
+			if ( $old !== $original && $old !== $moved_from && ! in_array( $old, $keep, true ) ) {
 				Pipeline::delete_in_uploads( $old );
 			}
 		}

@@ -126,6 +126,33 @@ final class PolicyTest extends TestCase {
 		$this->assertSame( array( 1, 100 ), Policy::fit( 1, 20000, 100 ) );
 	}
 
+	public function test_free_name_avoids_converted_siblings_of_earlier_uploads(): void {
+		// An earlier "photo.jpg" became photo.webp + photo-300x200.webp; a new photo.jpg (or .png) must not reuse the base.
+		$existing = array( '.', '..', 'photo.webp', 'photo-300x200.webp', 'other.jpg' );
+		$this->assertSame( 'photo-1.jpg', Policy::free_name( 'photo.jpg', $existing, array( 'webp', 'avif' ) ) );
+		$this->assertSame( 'photo-1.png', Policy::free_name( 'photo.png', $existing, array( 'webp', 'avif' ) ) );
+		$this->assertSame( 'photo-1.webp', Policy::free_name( 'photo.webp', $existing, array( 'webp' ) ) );
+		// Only a sub-size sibling present, case-insensitive, "-scaled" and "-rotated" count too.
+		$this->assertSame( 'logo-1.jpg', Policy::free_name( 'logo.jpg', array( 'LOGO-150x150.WEBP' ), array( 'webp' ) ) );
+		$this->assertSame( 'img-1.png', Policy::free_name( 'img.png', array( 'img-scaled.avif' ), array( 'webp', 'avif' ) ) );
+		// Free names pass through unchanged; a taken "-1" moves on to "-2"; a user's own "-7" suffix is kept intact.
+		$this->assertSame( 'fresh.jpg', Policy::free_name( 'fresh.jpg', $existing, array( 'webp' ) ) );
+		$this->assertSame( 'photo-2.jpg', Policy::free_name( 'photo.jpg', array_merge( $existing, array( 'photo-1-768x512.webp' ) ), array( 'webp' ) ) );
+		$this->assertSame( 'report-7-1.jpg', Policy::free_name( 'report-7.jpg', array( 'report-7.webp' ), array( 'webp' ) ) );
+		// Its own extension is protected as well (core already does this, but the helper must not regress it).
+		$this->assertSame( 'a-1.jpg', Policy::free_name( 'a.jpg', array( 'a-1024x768.jpg' ), array() ) );
+		$this->assertSame( 'noext', Policy::free_name( 'noext', array( 'noext.webp' ), array() ) ); // nothing to protect: untouched
+	}
+
+	public function test_animated_gif_marker_ending_exactly_at_a_chunk_boundary_counts_once(): void {
+		$frame = "\x00\x21\xF9\x04\x04\x0A\x00\x00\x00\x2C";
+		$path  = sys_get_temp_dir() . '/lean-edge.gif';
+		// One marker whose last byte is the last byte of the first 100 KB chunk, nothing after: a single frame.
+		file_put_contents( $path, 'GIF89a' . str_repeat( 'z', 1024 * 100 - 6 - 10 ) . $frame . str_repeat( 'q', 50 ) );
+		$this->assertFalse( Policy::is_animated_gif( $path ) );
+		unlink( $path );
+	}
+
 	public function test_animated_gif_detection(): void {
 		$dir = sys_get_temp_dir();
 		$static = $dir . '/lean-static.gif';

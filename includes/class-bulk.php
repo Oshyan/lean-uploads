@@ -16,10 +16,13 @@ defined( 'ABSPATH' ) || exit;
 final class Bulk {
 
 	const OPTION     = 'lean_uploads_bulk';
+	const LOCK       = 'lean_uploads_bulk_lock';
 	const AJAX       = 'lean_uploads_bulk';
 	const CAP        = 'manage_options';
 	const BATCH      = 5;
 	const BUDGET_SEC = 20;
+	/** A lock older than this is considered abandoned (a request that died mid-batch). */
+	const LOCK_STALE_SEC = 180;
 
 	/** @var Library */
 	private $library;
@@ -49,6 +52,7 @@ final class Bulk {
 			'dry'     => false,
 			'started' => 0,
 			'updated' => 0,
+			'in_flight' => 0, // attachment being processed when the state was last saved; non-zero after a crash
 			'log'     => array(),
 		);
 	}
@@ -130,33 +134,76 @@ final class Bulk {
 
 	public function reset(): array {
 		delete_option( self::OPTION );
+		delete_option( self::LOCK );
 		return self::blank_state();
 	}
 
 	/**
 	 * Process the next few attachments. Safe to call repeatedly; stops when the status is not "running".
 	 *
-	 * @return array<string,mixed> New state.
+	 * Only one request at a time may run a batch (two tabs, or a reload plus Resume, would otherwise convert the
+	 * same attachments concurrently). State is saved before and after every attachment, so a request that dies
+	 * mid-way loses at most the one item it was on, and that item is reported as failed on the next step rather
+	 * than retried forever.
+	 *
+	 * @return array<string,mixed> New state; 'busy' => true when another request holds the lock.
 	 */
 	public function step(): array {
 		$state = $this->state();
 		if ( 'running' !== $state['status'] ) {
 			return $state;
 		}
-		$deadline = microtime( true ) + self::BUDGET_SEC;
-		$n        = 0;
-		while ( $state['cursor'] < $state['total'] && $n < self::BATCH && microtime( true ) < $deadline ) {
-			$id = (int) $state['ids'][ $state['cursor'] ];
-			++$state['cursor'];
-			++$n;
-			$this->process_one( $id, $state );
+		if ( ! $this->lock() ) {
+			$state['busy'] = true;
+			return $state;
 		}
-		if ( $state['cursor'] >= $state['total'] ) {
-			$state['status'] = 'done';
-			$state['ids']    = array(); // no need to keep the list around
+		try {
+			if ( function_exists( 'set_time_limit' ) && false === strpos( (string) ini_get( 'disable_functions' ), 'set_time_limit' ) ) {
+				set_time_limit( self::BUDGET_SEC * 3 ); // headroom for one large image past the budget check
+			}
+			if ( ! empty( $state['in_flight'] ) ) {
+				++$state['failed'];
+				$state['log'][]     = sprintf( '#%d failed: the previous request did not finish it (time limit or fatal error)', (int) $state['in_flight'] );
+				$state['in_flight'] = 0;
+			}
+			$deadline = microtime( true ) + self::BUDGET_SEC;
+			$n        = 0;
+			while ( $state['cursor'] < $state['total'] && $n < self::BATCH && microtime( true ) < $deadline ) {
+				$id = (int) $state['ids'][ $state['cursor'] ];
+				++$state['cursor'];
+				++$n;
+				$state['in_flight'] = $id;
+				$this->save( $state );
+				$this->process_one( $id, $state );
+				$state['in_flight'] = 0;
+				$this->save( $state );
+			}
+			if ( $state['cursor'] >= $state['total'] ) {
+				$state['status'] = 'done';
+				$state['ids']    = array(); // no need to keep the list around
+			}
+			$this->save( $state );
+		} finally {
+			$this->unlock();
 		}
-		$this->save( $state );
 		return $state;
+	}
+
+	/** Take the batch lock; add_option() is atomic at the database (the row either gets inserted or it does not). */
+	private function lock(): bool {
+		if ( add_option( self::LOCK, time(), '', false ) ) {
+			return true;
+		}
+		$held = (int) get_option( self::LOCK, 0 );
+		if ( $held && time() - $held > self::LOCK_STALE_SEC ) {
+			delete_option( self::LOCK ); // abandoned by a request that died
+			return (bool) add_option( self::LOCK, time(), '', false );
+		}
+		return false;
+	}
+
+	private function unlock(): void {
+		delete_option( self::LOCK );
 	}
 
 	/** @param array<string,mixed> $state Passed by reference and updated. */
@@ -209,7 +256,11 @@ final class Bulk {
 				wp_send_json_success( array( 'state' => $this->public_state( $state ) ) );
 				break;
 			case 'step':
-				wp_send_json_success( array( 'state' => $this->public_state( $this->step() ) ) );
+				$state = $this->step();
+				if ( ! empty( $state['busy'] ) ) {
+					wp_send_json_error( array( 'message' => 'busy' ), 409 );
+				}
+				wp_send_json_success( array( 'state' => $this->public_state( $state ) ) );
 				break;
 			case 'pause':
 				wp_send_json_success( array( 'state' => $this->public_state( $this->pause() ) ) );
@@ -227,7 +278,7 @@ final class Bulk {
 
 	/** The state without the ID list (which can be large and is of no use to the page). */
 	private function public_state( array $state ): array {
-		unset( $state['ids'] );
+		unset( $state['ids'], $state['busy'] );
 		return $state;
 	}
 }

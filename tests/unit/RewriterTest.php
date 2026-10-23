@@ -97,6 +97,57 @@ final class RewriterTest extends TestCase {
 		$this->assertSame( 'Ünïcødé ' . self::NEW . ' ✓', $back['caption'] );
 	}
 
+	public function test_whitespace_around_serialized_data_is_preserved_and_lengths_stay_right(): void {
+		// WordPress unserializes trim()med values, so these are live serialized rows and must not get plain-text treatment.
+		foreach ( array( "\n", ' ', "\t" ) as $ws ) {
+			$in   = $ws . serialize( array( 'u' => self::OLD ) ) . $ws;
+			$out  = Rewriter::replace_in_value( $in, $this->pairs() );
+			$this->assertSame( $ws, substr( $out, 0, 1 ) );
+			$this->assertSame( $ws, substr( $out, -1 ) );
+			$back = unserialize( trim( $out ), array( 'allowed_classes' => false ) );
+			$this->assertSame( self::NEW, $back['u'] );
+		}
+	}
+
+	public function test_deep_nesting_is_refused_instead_of_recursing_without_bound(): void {
+		$depth = 2000;
+		$in    = str_repeat( 'a:1:{i:0;', $depth ) . 's:' . strlen( self::OLD ) . ':"' . self::OLD . '";' . str_repeat( '}', $depth );
+		$this->assertSame( $in, Rewriter::replace_in_value( $in, $this->pairs() ) );
+		// Legitimate depth still works.
+		$ok = str_repeat( 'a:1:{i:0;', 20 ) . 's:' . strlen( self::OLD ) . ':"' . self::OLD . '";' . str_repeat( '}', 20 );
+		$this->assertStringContainsString( self::NEW, Rewriter::replace_in_value( $ok, $this->pairs() ) );
+	}
+
+	public function test_enum_tokens_are_copied_verbatim(): void {
+		$in  = 'a:2:{s:1:"e";E:11:"Suit:Hearts";s:1:"u";s:' . strlen( self::OLD ) . ':"' . self::OLD . '";}';
+		$out = Rewriter::replace_in_value( $in, $this->pairs() );
+		$this->assertStringContainsString( 'E:11:"Suit:Hearts";', $out );
+		$this->assertStringContainsString( self::NEW, $out );
+		$bad = 'a:1:{s:1:"e";E:5:"Suit:Hearts";}';
+		$this->assertSame( $bad, Rewriter::replace_in_value( $bad, $this->pairs() ) );
+	}
+
+	public function test_replacement_stops_at_a_name_boundary(): void {
+		$pairs = array( 'https://example.test/wp-content/uploads/2026/10/x' => 'https://example.test/wp-content/uploads/2026/10/photo.webp' );
+		$this->assertSame( 'https://example.test/wp-content/uploads/2026/10/xylophone.jpg', Rewriter::replace_in_value( 'https://example.test/wp-content/uploads/2026/10/xylophone.jpg', $pairs ) );
+		// A "photo.jpg.webp" sibling left by another plugin is not turned into "photo.webp.webp".
+		$this->assertSame( self::OLD . '.webp', Rewriter::replace_in_value( self::OLD . '.webp', $this->pairs() ) );
+		// Query strings, quotes, closing tags and end of string are boundaries.
+		$this->assertSame( self::NEW . '?v=3', Rewriter::replace_in_value( self::OLD . '?v=3', $this->pairs() ) );
+		$this->assertSame( '"' . self::NEW . '"', Rewriter::replace_in_value( '"' . self::OLD . '"', $this->pairs() ) );
+		$this->assertSame( self::NEW, Rewriter::replace_in_value( self::OLD, $this->pairs() ) );
+		// The same boundary applies inside serialized strings.
+		$in  = serialize( array( self::OLD . '.webp', self::OLD ) );
+		$out = unserialize( Rewriter::replace_in_value( $in, $this->pairs() ), array( 'allowed_classes' => false ) );
+		$this->assertSame( array( self::OLD . '.webp', self::NEW ), $out );
+	}
+
+	public function test_json_escaped_urls_are_rewritten_when_given_escaped_pairs(): void {
+		$esc = static function ( $u ) { return str_replace( '/', '\\/', $u ); };
+		$pairs = array( $esc( self::OLD ) => $esc( self::NEW ) );
+		$this->assertSame( '{"url":"' . $esc( self::NEW ) . '"}', Rewriter::replace_in_value( '{"url":"' . $esc( self::OLD ) . '"}', $pairs ) );
+	}
+
 	public function test_common_prefix(): void {
 		$this->assertSame( 'https://example.test/wp-content/uploads/2026/10/photo', Rewriter::common_prefix( array_keys( $this->pairs() ) ) );
 		$this->assertSame( '', Rewriter::common_prefix( array( 'abc', 'xyz' ) ) );
