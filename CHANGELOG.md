@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.0
+
+- per-format quality: separate WebP and AVIF settings (the old single value migrates to WebP)
+- originals are only removed for attachments the plugin was explicitly handed (new uploads, its own bulk/convert actions); core's regenerate paths, which any uploader can trigger, no longer convert or delete originals
+- the lossless intermediate no longer changes which per-type rules apply to an oversized upload
+- bulk conversion gives each attachment a base name unique for the target extension first, so two legacy files sharing a name cannot overwrite each other's thumbnails
+- bulk conversion restores previous metadata and deletes nothing when regeneration comes back incomplete
+- target names are claimed exclusively before renaming; all deletes confined to the uploads directory
+- opt-out flag no longer leaks to the next upload when core rejects the opted-out file
+- animated GIF detection no longer misses a frame marker on a read-chunk boundary
+- self-test uses exclusively created temp files and deletes only those
+- failure notices no longer expose encoder messages or server paths
+- Media Library bulk action capped at 25 items per request; result notice limited to the Media screen
+- uninstall removes the option on every site of a network
+
 ## 0.1.0
 
 - convert JPEG, PNG, BMP and TIFF uploads to WebP or AVIF and delete the original

@@ -4,7 +4,8 @@
  *
  * Runs the same pipeline as an upload: WordPress regenerates the full size and every sub-size from the current
  * original (one encode each), then the Pipeline finalizer removes the original. Old sub-size files that the new
- * set does not overwrite are cleaned up here.
+ * set does not overwrite are cleaned up here. The whole thing is treated as a transaction: if regeneration
+ * comes back incomplete, the previous metadata is restored and nothing is deleted.
  *
  * @package LeanUploads
  */
@@ -22,6 +23,9 @@ final class Library {
 
 	/** @var bool Set once references were rewritten by direct SQL; a persistent object cache then holds stale posts. */
 	private static $cache_dirty = false;
+
+	/** @var array<int,array|\WP_Error> Per-request memo for inspect(), the Media Library asks several times per row. */
+	private static $inspected = array();
 
 	public function __construct( Settings $settings, Pipeline $pipeline ) {
 		$this->settings = $settings;
@@ -65,10 +69,22 @@ final class Library {
 	 *
 	 * @return array{action:string,reason:string,mime:string,target:string,ext:string,bytes:int,path:string}|\WP_Error
 	 */
-	public function inspect( int $id ) {
-		$path = get_attached_file( $id );
+	public function inspect( int $id, bool $fresh = false ) {
+		if ( ! $fresh && isset( self::$inspected[ $id ] ) ) {
+			return self::$inspected[ $id ];
+		}
+		self::$inspected[ $id ] = $this->do_inspect( $id );
+		return self::$inspected[ $id ];
+	}
+
+	/** @return array|\WP_Error */
+	private function do_inspect( int $id ) {
+		$path = get_attached_file( $id, true );
 		if ( ! $path || ! file_exists( $path ) ) {
 			return new \WP_Error( 'missing', 'file missing on disk' );
+		}
+		if ( ! Pipeline::within_uploads( $path ) ) {
+			return new \WP_Error( 'skip', 'file is outside the uploads directory' );
 		}
 		$mime = wp_get_image_mime( $path );
 		if ( ! $mime ) {
@@ -109,7 +125,7 @@ final class Library {
 	 * @return array{old_name:string,new_name:string,bytes_before:int,bytes_after:int,urls:array}|\WP_Error
 	 */
 	public function convert_attachment( int $id, bool $update_references = false ) {
-		$info = $this->inspect( $id );
+		$info = $this->inspect( $id, true );
 		if ( is_wp_error( $info ) ) {
 			return $info;
 		}
@@ -118,27 +134,53 @@ final class Library {
 		}
 		require_once ABSPATH . 'wp-admin/includes/image.php';
 
-		$original = $info['path'];
-		$old_meta = wp_get_attachment_metadata( $id );
-		$old_meta = is_array( $old_meta ) ? $old_meta : array();
-		$old_urls = $this->all_urls( wp_get_attachment_url( $id ), $old_meta );
+		$original  = $info['path'];
+		$old_name  = basename( $original );
+		$old_meta  = wp_get_attachment_metadata( $id );
+		$old_meta  = is_array( $old_meta ) ? $old_meta : array();
+		$old_urls  = $this->all_urls( wp_get_attachment_url( $id ), $old_meta );
 		$old_files = $this->all_files( $original, $old_meta );
 
+		/*
+		 * Two pre-existing attachments can share a base name ("logo.jpg" and "logo.png" in the same month);
+		 * regenerating the second would overwrite the first one's new thumbnails, because core never checks
+		 * for existing sub-size files. Give this attachment a base name that is unique for the target extension
+		 * before regenerating (wp_unique_filename also scans "-WxH" siblings).
+		 */
+		$dir  = dirname( $original );
+		$want = Policy::rename( $old_name, $info['ext'] );
+		$uniq = wp_unique_filename( $dir, $want );
+		if ( pathinfo( $uniq, PATHINFO_FILENAME ) !== pathinfo( $original, PATHINFO_FILENAME ) ) {
+			$moved = $dir . '/' . pathinfo( $uniq, PATHINFO_FILENAME ) . '.' . pathinfo( $original, PATHINFO_EXTENSION );
+			if ( file_exists( $moved ) || ! Pipeline::within_uploads( $moved ) || ! rename( $original, $moved ) ) {
+				return new \WP_Error( 'lean_uploads_rename', 'Could not give the file a unique name before converting.' );
+			}
+			update_attached_file( $id, $moved );
+			$original = $moved;
+		}
+
+		Pipeline::intend( $id );
 		$new_meta = wp_generate_attachment_metadata( $id, $original );
-		if ( ! is_array( $new_meta ) || empty( $new_meta['file'] ) ) {
-			return new \WP_Error( 'lean_uploads_metadata', 'WordPress could not process the image.' );
+		$new_path = get_attached_file( $id, true );
+
+		$complete = is_array( $new_meta ) && ! empty( $new_meta['file'] )
+			&& ( empty( $old_meta['sizes'] ) || ! empty( $new_meta['sizes'] ) );
+		if ( ! $complete || ( $new_path === $original && 'convert' === $info['action'] ) ) {
+			// Core already stored partial metadata while working; put the previous state back and touch no files.
+			if ( $original !== $info['path'] && file_exists( $original ) ) {
+				rename( $original, $info['path'] ); // undo the unique-name move
+				update_attached_file( $id, $info['path'] );
+			}
+			wp_update_attachment_metadata( $id, $old_meta );
+			return new \WP_Error( $complete ? 'skip' : 'lean_uploads_metadata', $complete ? 'converted file would not be smaller, or conversion failed (see admin notices)' : 'WordPress could not regenerate the image; nothing was changed' );
 		}
 		wp_update_attachment_metadata( $id, $new_meta );
 
-		$new_path = get_attached_file( $id, true );
-		if ( $new_path === $original && 'convert' === $info['action'] ) {
-			return new \WP_Error( 'skip', 'converted file would not be smaller, or conversion failed (see admin notices)' );
-		}
 		// Remove old sub-size files the new set did not overwrite (the original itself was handled by the pipeline).
 		$keep = $this->all_files( $new_path, $new_meta );
 		foreach ( $old_files as $old ) {
-			if ( $old !== $original && ! in_array( $old, $keep, true ) && file_exists( $old ) ) {
-				wp_delete_file( $old );
+			if ( $old !== $info['path'] && $old !== $original && ! in_array( $old, $keep, true ) ) {
+				Pipeline::delete_in_uploads( $old );
 			}
 		}
 
@@ -153,6 +195,7 @@ final class Library {
 		if ( $update_references && $pairs ) {
 			$this->rewrite_references( $pairs );
 		}
+		unset( self::$inspected[ $id ] );
 
 		/**
 		 * Fires after an existing attachment was converted in place.
@@ -163,7 +206,7 @@ final class Library {
 		do_action( 'lean_uploads_attachment_converted', $id, $pairs );
 
 		return array(
-			'old_name'     => basename( $original ),
+			'old_name'     => $old_name,
 			'new_name'     => basename( $new_path ),
 			'bytes_before' => (int) $info['bytes'],
 			'bytes_after'  => (int) wp_filesize( $new_path ),
@@ -180,34 +223,34 @@ final class Library {
 		$base = trailingslashit( dirname( $url ) );
 		$out  = array( 'full' => $url );
 		if ( ! empty( $meta['original_image'] ) ) {
-			$out['original_image'] = $base . $meta['original_image'];
+			$out['original_image'] = $base . wp_basename( $meta['original_image'] );
 		}
 		foreach ( (array) ( $meta['sizes'] ?? array() ) as $size => $info ) {
 			if ( ! empty( $info['file'] ) ) {
-				$out[ $size ] = $base . $info['file'];
+				$out[ $size ] = $base . wp_basename( $info['file'] );
 			}
 		}
 		return $out;
 	}
 
-	/** @return string[] absolute paths of the file, its original_image and every size */
+	/** @return string[] absolute paths of the file, its original_image and every size (all confined to the file's directory) */
 	private function all_files( string $path, array $meta ): array {
 		$dir = dirname( $path );
 		$out = array( $path );
 		if ( ! empty( $meta['original_image'] ) ) {
-			$out[] = $dir . '/' . $meta['original_image'];
+			$out[] = $dir . '/' . wp_basename( $meta['original_image'] );
 		}
 		foreach ( (array) ( $meta['sizes'] ?? array() ) as $info ) {
 			if ( ! empty( $info['file'] ) ) {
-				$out[] = $dir . '/' . $info['file'];
+				$out[] = $dir . '/' . wp_basename( $info['file'] );
 			}
 		}
 		return $out;
 	}
 
 	/**
-	 * Serialization-safe URL rewriting by delegating to `wp search-replace`. Only available under WP-CLI;
-	 * in the admin we leave content alone and say so.
+	 * Serialization-safe URL rewriting by delegating to `wp search-replace` (current site's tables only).
+	 * Only available under WP-CLI; in the admin we leave content alone and say so.
 	 *
 	 * @param array<string,string> $pairs old => new.
 	 */
@@ -217,7 +260,7 @@ final class Library {
 		}
 		foreach ( $pairs as $old_url => $new_url ) {
 			$r = \WP_CLI::runcommand(
-				sprintf( 'search-replace %s %s --all-tables-with-prefix --skip-columns=guid --report=0 --quiet', escapeshellarg( $old_url ), escapeshellarg( $new_url ) ),
+				sprintf( 'search-replace %s %s --skip-columns=guid --report=0 --quiet', escapeshellarg( $old_url ), escapeshellarg( $new_url ) ),
 				array( 'exit_error' => false, 'launch' => false, 'return' => 'all' )
 			);
 			// search-replace writes straight to the database; on hosts with a persistent object cache the

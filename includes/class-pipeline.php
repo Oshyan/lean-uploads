@@ -10,6 +10,11 @@
  * This class steers that machinery (threshold = our cap, output format = our target, quality = ours) and then
  * finishes the job core refuses to: it deletes the original, drops the "-scaled" suffix, and updates the mime type.
  *
+ * It only ever does that to attachments it was explicitly handed: new uploads (noted at `add_attachment`) and
+ * attachments the Library class asks it to process. Core regenerates sub-sizes in other contexts too (its own
+ * "create image subsizes" AJAX, regeneration plugins, `wp media regenerate`), some of which any user with
+ * `upload_files` can trigger for any attachment; those never touch originals here.
+ *
  * @package LeanUploads
  */
 
@@ -20,6 +25,9 @@ defined( 'ABSPATH' ) || exit;
 final class Pipeline {
 
 	const KEEP_META = '_lean_uploads_keep';
+
+	/** Lossless format for the intermediate: every editor can write PNG, it keeps alpha, and it is temporary. */
+	const INTERMEDIATE_MIME = 'image/png';
 
 	/** @var Settings */
 	private $settings;
@@ -33,20 +41,17 @@ final class Pipeline {
 	/** @var string[] Paths of files stored as uploaded in this request (from the opt-out token). */
 	private static $kept_paths = array();
 
-	/** @var bool True while core is generating metadata for an opted-out attachment. */
-	private static $processing_kept = false;
+	/** @var array<int,bool> Attachment IDs this plugin may finalize in this request. */
+	private static $intended = array();
+
+	/** @var array|null The attachment core is currently processing: id, kept, intended, intermediate, source_mime. */
+	private static $current = null;
 
 	/** @var bool Re-entrancy guard for the one case where finalize() regenerates sizes itself. */
 	private static $finalizing = false;
 
 	/** @var callable|null Active "GD first" editor-order filter, if any. */
 	private static $gd_first = null;
-
-	/** @var string Path of the lossless intermediate that replaced an oversized original in this request, if any. */
-	private static $intermediate = '';
-
-	/** Lossless format for the intermediate: every editor can write PNG, it keeps alpha, and it is temporary. */
-	const INTERMEDIATE_MIME = 'image/png';
 
 	public function __construct( Settings $settings, Capabilities $caps, Converter $converter, Notices $notices ) {
 		$this->settings  = $settings;
@@ -58,7 +63,7 @@ final class Pipeline {
 	public function register_hooks(): void {
 		add_filter( 'image_editor_output_format', array( $this, 'output_format' ), 20, 3 );
 		add_filter( 'wp_editor_set_quality', array( $this, 'quality' ), 20, 2 );
-		add_action( 'add_attachment', array( $this, 'flag_kept_attachment' ) );
+		add_action( 'add_attachment', array( $this, 'note_new_attachment' ) );
 		add_filter( 'big_image_size_threshold', array( $this, 'begin_attachment' ), 1, 4 );
 		add_filter( 'wp_generate_attachment_metadata', array( $this, 'finalize' ), PHP_INT_MAX - 10, 3 );
 	}
@@ -77,35 +82,31 @@ final class Pipeline {
 		);
 	}
 
-	/* ------------------------------------------------------------------ opt-out bookkeeping */
+	/* ------------------------------------------------------------------ intent and opt-out bookkeeping */
 
 	/** Called by the upload handler when a file was stored as uploaded. */
 	public static function remember_kept( string $path ): void {
 		self::$kept_paths[] = $path;
 	}
 
+	/** Mark an attachment as one this plugin may convert in this request (Library does this before regenerating). */
+	public static function intend( int $attachment_id ): void {
+		self::$intended[ $attachment_id ] = true;
+	}
+
 	/**
-	 * Persist "opted out" on the attachment so later regenerations respect it too.
+	 * A new attachment: it is ours to process, and if its file came through the opt-out, persist that on the
+	 * attachment so later regenerations respect it too.
 	 *
 	 * @param int $attachment_id New attachment.
 	 */
-	public function flag_kept_attachment( $attachment_id ): void {
-		$file = get_attached_file( (int) $attachment_id );
+	public function note_new_attachment( $attachment_id ): void {
+		$attachment_id = (int) $attachment_id;
+		self::intend( $attachment_id );
+		$file = get_attached_file( $attachment_id, true );
 		if ( $file && in_array( $file, self::$kept_paths, true ) ) {
-			update_post_meta( (int) $attachment_id, self::KEEP_META, 1 );
+			update_post_meta( $attachment_id, self::KEEP_META, 1 );
 		}
-	}
-
-	private static function is_kept_path( $filename ): bool {
-		if ( ! is_string( $filename ) || '' === $filename ) {
-			return false;
-		}
-		foreach ( self::$kept_paths as $kept ) {
-			if ( Policy::path_belongs_to( $filename, $kept ) ) {
-				return true;
-			}
-		}
-		return false;
 	}
 
 	/* ------------------------------------------------------------------ steering core */
@@ -113,17 +114,30 @@ final class Pipeline {
 	/**
 	 * `big_image_size_threshold` is the first filter core runs inside wp_create_image_subsizes() and carries the
 	 * attachment ID and dimensions: the earliest point to learn which attachment the following filter calls belong
-	 * to, to set the size cap, and to steer huge images away from Imagick before it fails.
+	 * to, to set the size cap, and to produce the lossless intermediate for oversized images.
 	 *
 	 * @param int|false $threshold     Core default (2560) or whatever an earlier filter set.
-	 * @param array     $imagesize     [width, height, ...].
+	 * @param array     $imagesize     [width, height, ..., 'mime' => ...].
 	 * @param string    $file          Original file.
 	 * @param int       $attachment_id Attachment.
 	 * @return int|false
 	 */
 	public function begin_attachment( $threshold, $imagesize, $file, $attachment_id ) {
-		self::$processing_kept = $attachment_id && ( get_post_meta( (int) $attachment_id, self::KEEP_META, true ) || in_array( (string) $file, self::$kept_paths, true ) );
+		self::end_attachment();
+		$attachment_id = (int) $attachment_id;
+		$file          = (string) $file;
+		$kept          = $attachment_id && ( get_post_meta( $attachment_id, self::KEEP_META, true ) || in_array( $file, self::$kept_paths, true ) );
+		self::$current = array(
+			'id'           => $attachment_id,
+			'kept'         => (bool) $kept,
+			'intended'     => ! empty( self::$intended[ $attachment_id ] ),
+			'intermediate' => '',
+			'source_mime'  => (string) ( $imagesize['mime'] ?? '' ),
+		);
 		$s = $this->settings->get();
+		if ( $kept || empty( $s['enabled'] ) || ! self::$current['intended'] || ! self::within_uploads( $file ) ) {
+			return $threshold; // not ours: core's own behaviour, untouched
+		}
 
 		$w = (int) ( $imagesize[0] ?? 0 );
 		$h = (int) ( $imagesize[1] ?? 0 );
@@ -141,9 +155,6 @@ final class Pipeline {
 			add_filter( 'wp_image_editors', self::$gd_first, 999 );
 		}
 
-		if ( self::$processing_kept || empty( $s['enabled'] ) ) {
-			return $threshold;
-		}
 		$max = (int) $s['max_dimension'];
 		if ( $max <= 0 ) {
 			return $threshold;
@@ -155,19 +166,19 @@ final class Pipeline {
 		/*
 		 * Oversized: resample ONCE, losslessly, to the cap, and let that file stand in for the original.
 		 * Core then cuts the converted full size and every sub-size from this small lossless file instead of
-		 * decoding a huge original twice (and, on hosts with tight Imagick limits, failing twice).
-		 * Metadata was already read from the true original a few lines earlier in core, so nothing is lost.
+		 * decoding a huge original twice. Metadata was already read from the true original a few lines earlier
+		 * in core, so nothing is lost.
 		 */
 		$tmp = $file . '.lean-intermediate.png';
-		$res = $this->converter->convert( (string) $file, $tmp, self::INTERMEDIATE_MIME, array( 'quality' => 100, 'max_dimension' => $max ) );
-		if ( is_wp_error( $res ) || ! rename( $tmp, (string) $file ) ) {
+		$res = $this->converter->convert( $file, $tmp, self::INTERMEDIATE_MIME, array( 'quality' => 100, 'max_dimension' => $max ) );
+		if ( is_wp_error( $res ) || ! rename( $tmp, $file ) ) {
 			if ( file_exists( $tmp ) ) {
 				wp_delete_file( $tmp );
 			}
 			return $max; // let core try it the slow way
 		}
-		clearstatcache( true, (string) $file );
-		self::$intermediate = (string) $file;
+		clearstatcache( true, $file );
+		self::$current['intermediate'] = $file;
 		if ( null !== self::$gd_first ) {
 			// The image core will now work on is small; Imagick is the better editor again.
 			remove_filter( 'wp_image_editors', self::$gd_first, 999 );
@@ -178,8 +189,7 @@ final class Pipeline {
 	}
 
 	private static function end_attachment(): void {
-		self::$processing_kept = false;
-		self::$intermediate    = '';
+		self::$current = null;
 		if ( null !== self::$gd_first ) {
 			remove_filter( 'wp_image_editors', self::$gd_first, 999 );
 			self::$gd_first = null;
@@ -187,19 +197,30 @@ final class Pipeline {
 	}
 
 	/**
-	 * Output format for the converted full size and every generated size.
+	 * Output format for generated sizes, and for the converted full size of attachments we own.
 	 *
-	 * @param array  $formats  mime => mime map.
-	 * @param string $filename Path being processed (may be empty for sub-sizes).
-	 * @param string $mime     Source mime.
+	 * Core calls this with a file name for the full-size save and with none for sub-sizes, which is how the two
+	 * are told apart: thumbnails follow the "Thumbnails" setting for every attachment; the full size is only
+	 * converted for attachments this plugin was handed (so a regeneration triggered by someone else never
+	 * produces a converted copy of an original we are not allowed to remove).
+	 *
+	 * @param array       $formats  mime => mime map.
+	 * @param string|null $filename Path being written, or null for sub-sizes.
+	 * @param string      $mime     Source mime.
 	 * @return array
 	 */
 	public function output_format( $formats, $filename, $mime ) {
 		$s = $this->settings->get();
-		if ( self::$processing_kept || self::is_kept_path( $filename ) ) {
+		$c = self::$current;
+		if ( $c && $c['kept'] ) {
 			return $formats;
 		}
-		if ( empty( $s['enabled'] ) && empty( $s['derivatives'] ) ) {
+		$full = is_string( $filename ) && '' !== $filename;
+		$ours = $c && $c['intended'] && ! empty( $s['enabled'] );
+		if ( $full && ! $ours ) {
+			return $formats;
+		}
+		if ( ! $full && empty( $s['derivatives'] ) ) {
 			return $formats;
 		}
 		$target = Policy::target_mime( $s, $this->support_map() );
@@ -220,6 +241,9 @@ final class Pipeline {
 		if ( ! empty( $s['convert_gif'] ) ) {
 			$sources[] = 'image/gif'; // Animated GIFs never reach here: the upload handler opts them out.
 		}
+		if ( $c && '' !== $c['intermediate'] ) {
+			$sources[] = 'image/png'; // the intermediate is PNG whatever the upload was; it must be converted
+		}
 		foreach ( $sources as $from ) {
 			$formats[ $from ] = $target;
 		}
@@ -230,15 +254,15 @@ final class Pipeline {
 	}
 
 	/**
+	 * Per-format quality.
+	 *
 	 * @param int    $quality Current quality.
 	 * @param string $mime    Output mime.
 	 * @return int
 	 */
 	public function quality( $quality, $mime ) {
-		if ( in_array( $mime, Policy::MODERN, true ) ) {
-			return (int) $this->settings->get()['quality'];
-		}
-		return $quality;
+		$q = $this->settings->quality_for( (string) $mime );
+		return null === $q ? $quality : $q;
 	}
 
 	/* ------------------------------------------------------------------ finishing the job */
@@ -255,15 +279,19 @@ final class Pipeline {
 	 */
 	public function finalize( $metadata, $attachment_id, $context = 'create' ) {
 		$attachment_id = (int) $attachment_id;
+		$c             = self::$current;
 		try {
 			if ( self::$finalizing || ! is_array( $metadata ) || empty( $metadata['file'] ) || ! wp_attachment_is_image( $attachment_id ) ) {
 				return $metadata;
 			}
+			if ( ! $c || $c['id'] !== $attachment_id || ! $c['intended'] || $c['kept'] ) {
+				return $metadata; // not an attachment we were handed in this request
+			}
 			$s = $this->settings->get();
-			if ( empty( $s['enabled'] ) || self::$processing_kept || get_post_meta( $attachment_id, self::KEEP_META, true ) ) {
+			if ( empty( $s['enabled'] ) ) {
 				return $metadata;
 			}
-			return $this->finish( $metadata, $attachment_id, $s );
+			return $this->finish( $metadata, $attachment_id, $s, $c );
 		} finally {
 			self::end_attachment();
 		}
@@ -272,19 +300,23 @@ final class Pipeline {
 	/**
 	 * @param array $metadata
 	 * @param array $s Settings.
+	 * @param array $c Current-attachment record.
 	 * @return array
 	 */
-	private function finish( array $metadata, int $id, array $s ): array {
+	private function finish( array $metadata, int $id, array $s, array $c ): array {
 		$file = get_attached_file( $id, true );
-		if ( ! $file || ! file_exists( $file ) ) {
+		if ( ! $file || ! file_exists( $file ) || ! self::within_uploads( $file ) ) {
 			return $metadata;
 		}
 		$dir      = dirname( $file );
-		$original = ! empty( $metadata['original_image'] ) ? $dir . '/' . $metadata['original_image'] : $file;
-		if ( ! file_exists( $original ) ) {
+		$original = ! empty( $metadata['original_image'] ) ? $dir . '/' . wp_basename( $metadata['original_image'] ) : $file;
+		if ( ! file_exists( $original ) || ! self::within_uploads( $original ) ) {
 			$original = $file;
 		}
-		$orig_mime = wp_get_image_mime( $original );
+		// The intermediate is PNG bytes under the uploaded name; decide by what was actually uploaded.
+		$orig_mime = ( '' !== $c['intermediate'] && $original === $c['intermediate'] && '' !== $c['source_mime'] )
+			? $c['source_mime']
+			: wp_get_image_mime( $original );
 		if ( ! $orig_mime ) {
 			return $metadata;
 		}
@@ -301,10 +333,10 @@ final class Pipeline {
 		// Did core already produce what we want? (converted and/or scaled full size, distinct from the original)
 		$file_mime = wp_get_image_mime( $file );
 		if ( $file === $original || $file_mime !== $target ) {
-			if ( $decision['convert'] ) {
-				$converted = $this->convert_full_myself( $metadata, $id, $original, $decision, $s );
+			if ( $decision['convert'] || '' !== $c['intermediate'] ) {
+				$converted = $this->convert_full_myself( $metadata, $id, $original, $target, $decision, $s );
 				if ( is_wp_error( $converted ) ) {
-					$this->notices->add_failure( basename( $original ), $converted->get_error_message() );
+					$this->notices->add_failure( basename( $original ), $converted );
 					do_action( 'lean_uploads_failed', array( 'name' => basename( $original ) ), $converted );
 					return $metadata;
 				}
@@ -316,15 +348,15 @@ final class Pipeline {
 		}
 
 		$final_px = array( (int) ( $metadata['width'] ?? 0 ), (int) ( $metadata['height'] ?? 0 ) );
-		$resized  = $final_px !== $orig_px || ( '' !== self::$intermediate && self::$intermediate === $original );
-		if ( '' !== self::$intermediate && ! empty( $metadata['image_meta'] ) ) {
+		$resized  = $final_px !== $orig_px || '' !== $c['intermediate'];
+		if ( '' !== $c['intermediate'] && ! empty( $metadata['image_meta'] ) ) {
 			// The intermediate was written upright; the EXIF orientation read from the true original no longer applies.
 			$metadata['image_meta']['orientation'] = 1;
 		}
 
 		// Never trade a file for a bigger one unless its dimensions also shrank.
 		if ( $file !== $original && ! $resized && wp_filesize( $file ) >= wp_filesize( $original ) && apply_filters( 'lean_uploads_keep_smaller_original', true ) ) {
-			wp_delete_file( $file );
+			self::delete_in_uploads( $file );
 			update_attached_file( $id, $original );
 			$metadata['file']     = _wp_relative_upload_path( $original );
 			$metadata['filesize'] = wp_filesize( $original );
@@ -334,15 +366,20 @@ final class Pipeline {
 
 		// The original has done its job.
 		if ( $file !== $original ) {
-			wp_delete_file( $original );
+			self::delete_in_uploads( $original );
 		}
 		unset( $metadata['original_image'] );
 
-		// "photo-scaled.webp" => "photo.webp" when that name is free.
+		// "photo-scaled.webp" => "photo.webp" when that name is free. Claim it exclusively first: a plain
+		// file_exists() check followed by rename() could replace a file another upload just created.
 		$plain = $dir . '/' . Policy::rename( basename( $original ), Policy::EXT[ $target ] ?? pathinfo( $file, PATHINFO_EXTENSION ) );
-		if ( $plain !== $file && ! file_exists( $plain ) && rename( $file, $plain ) ) {
-			$file = $plain;
-			update_attached_file( $id, $file );
+		if ( $plain !== $file && self::claim( $plain ) ) {
+			if ( rename( $file, $plain ) ) {
+				$file = $plain;
+				update_attached_file( $id, $file );
+			} else {
+				self::delete_in_uploads( $plain );
+			}
 		}
 		$metadata['file']     = _wp_relative_upload_path( $file );
 		$metadata['filesize'] = wp_filesize( $file );
@@ -368,22 +405,23 @@ final class Pipeline {
 	 *
 	 * @return array|\WP_Error Updated metadata.
 	 */
-	private function convert_full_myself( array $metadata, int $id, string $original, array $decision, array $s ) {
+	private function convert_full_myself( array $metadata, int $id, string $original, string $target, array $decision, array $s ) {
 		$dir  = dirname( $original );
-		$dest = $dir . '/' . Policy::rename( basename( $original ), $decision['ext'] );
-		if ( file_exists( $dest ) && $dest !== $original ) {
+		$dest = $dir . '/' . Policy::rename( basename( $original ), Policy::EXT[ $target ] ?? 'webp' );
+		if ( $dest === $original || ! self::claim( $dest ) ) {
 			$dest = $dir . '/' . wp_unique_filename( $dir, basename( $dest ) );
-		}
-		if ( $dest === $original ) {
-			$dest = $original . '.lean-tmp.' . $decision['ext'];
+			if ( ! self::claim( $dest ) ) {
+				return new \WP_Error( 'lean_uploads_claim', 'Could not reserve a file name for the converted image.' );
+			}
 		}
 		$result = $this->converter->convert(
 			$original,
 			$dest,
-			$decision['target_mime'],
-			array( 'quality' => (int) $s['quality'], 'max_dimension' => (int) $s['max_dimension'], 'lossless' => ! empty( $decision['lossless'] ) )
+			$target,
+			array( 'quality' => $this->settings->quality_for( $target ) ?? 75, 'max_dimension' => (int) $s['max_dimension'], 'lossless' => ! empty( $decision['lossless'] ) )
 		);
 		if ( is_wp_error( $result ) ) {
+			self::delete_in_uploads( $dest );
 			return $result;
 		}
 		update_attached_file( $id, $dest );
@@ -391,7 +429,7 @@ final class Pipeline {
 		$metadata['width']          = (int) $result['width'];
 		$metadata['height']         = (int) $result['height'];
 		$metadata['filesize']       = (int) $result['bytes_after'];
-		$metadata['original_image'] = basename( $original );
+		$metadata['original_image'] = wp_basename( $original );
 
 		if ( empty( $metadata['sizes'] ) ) {
 			// Core could not cut sizes from the original (editor failure); cut them from the converted file.
@@ -406,5 +444,46 @@ final class Pipeline {
 			}
 		}
 		return $metadata;
+	}
+
+	/* ------------------------------------------------------------------ file-system guards */
+
+	/** Whether a path resolves inside the uploads directory (symlinks resolved). */
+	public static function within_uploads( string $path ): bool {
+		$base = wp_get_upload_dir()['basedir'] ?? '';
+		$real_base = $base ? realpath( $base ) : false;
+		$real_path = realpath( $path );
+		if ( ! $real_base || ! $real_path ) {
+			// A path that does not exist yet (a new file we are about to create): check its directory instead.
+			$real_path = realpath( dirname( $path ) );
+			if ( ! $real_base || ! $real_path ) {
+				return false;
+			}
+			return 0 === strpos( $real_path . '/', trailingslashit( $real_base ) );
+		}
+		return 0 === strpos( $real_path . '/', trailingslashit( $real_base ) );
+	}
+
+	/** Delete a file only if it lives inside the uploads directory. */
+	public static function delete_in_uploads( string $path ): void {
+		$base = wp_get_upload_dir()['basedir'] ?? '';
+		if ( '' !== $base && file_exists( $path ) ) {
+			wp_delete_file_from_directory( $path, $base );
+		}
+	}
+
+	/**
+	 * Create a path exclusively (fails if it exists). The caller then renames its real file over this placeholder.
+	 */
+	public static function claim( string $path ): bool {
+		if ( ! self::within_uploads( $path ) ) {
+			return false;
+		}
+		$fh = @fopen( $path, 'x' ); // phpcs:ignore WordPress.PHP.NoSilencedErrors.Discouraged
+		if ( ! $fh ) {
+			return false;
+		}
+		fclose( $fh );
+		return true;
 	}
 }

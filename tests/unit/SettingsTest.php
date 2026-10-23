@@ -11,7 +11,8 @@ final class SettingsTest extends TestCase {
 		$d = Settings::defaults();
 		$this->assertTrue( $d['enabled'] );
 		$this->assertSame( 'webp', $d['format'] );
-		$this->assertSame( 75, $d['quality'] );
+		$this->assertSame( 75, $d['webp_quality'] );
+		$this->assertSame( 60, $d['avif_quality'] );
 		$this->assertSame( 2560, $d['max_dimension'] );
 		$this->assertTrue( $d['convert_png'] );
 		$this->assertTrue( $d['convert_jpeg'] );
@@ -21,15 +22,20 @@ final class SettingsTest extends TestCase {
 	}
 
 	public function test_sanitize_clamps_numbers(): void {
-		$s = Settings::sanitize( array( 'quality' => 150, 'max_dimension' => -5 ) );
-		$this->assertSame( 100, $s['quality'] );
+		$s = Settings::sanitize( array( 'webp_quality' => 150, 'avif_quality' => -3, 'max_dimension' => -5 ) );
+		$this->assertSame( 100, $s['webp_quality'] );
+		$this->assertSame( 1, $s['avif_quality'] );
 		$this->assertSame( 0, $s['max_dimension'] );
-		$s = Settings::sanitize( array( 'quality' => 0, 'max_dimension' => 99999 ) );
-		$this->assertSame( 1, $s['quality'] );
+		$s = Settings::sanitize( array( 'webp_quality' => 0, 'max_dimension' => 99999 ) );
+		$this->assertSame( 1, $s['webp_quality'] );
 		$this->assertSame( 20000, $s['max_dimension'] );
-		$s = Settings::sanitize( array( 'quality' => '80', 'max_dimension' => '2000' ) );
-		$this->assertSame( 80, $s['quality'] );
+		$s = Settings::sanitize( array( 'webp_quality' => '80', 'max_dimension' => '2000' ) );
+		$this->assertSame( 80, $s['webp_quality'] );
 		$this->assertSame( 2000, $s['max_dimension'] );
+		// Installs from before per-format quality: the single "quality" applied to WebP.
+		$s = Settings::sanitize( array( 'quality' => 66 ) );
+		$this->assertSame( 66, $s['webp_quality'] );
+		$this->assertSame( 60, $s['avif_quality'] );
 	}
 
 	public function test_sanitize_format_and_booleans(): void {
@@ -55,11 +61,11 @@ final class SettingsTest extends TestCase {
 	}
 
 	public function test_form_submission_treats_missing_checkbox_as_off(): void {
-		$s = Settings::sanitize_form( array( 'quality' => 70 ) );
+		$s = Settings::sanitize_form( array( 'webp_quality' => 70 ) );
 		$this->assertFalse( $s['enabled'] );
 		$this->assertFalse( $s['convert_png'] );
 		$this->assertFalse( $s['derivatives'] );
-		$this->assertSame( 70, $s['quality'] );
+		$this->assertSame( 70, $s['webp_quality'] );
 
 		$s = Settings::sanitize_form( 'not-an-array' );
 		foreach ( array( 'enabled', 'convert_jpeg', 'convert_png', 'png_lossless', 'convert_gif', 'convert_other', 'derivatives' ) as $k ) {

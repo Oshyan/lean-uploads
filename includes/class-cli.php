@@ -62,13 +62,17 @@ final class CLI {
 		}
 		$ext      = Policy::EXT[ $target ];
 		$failures = 0;
-		$tmp_dir  = get_temp_dir();
+		$created  = array(); // every temp file we make, deleted by exact path at the end (never by pattern)
 
+		// wp_tempnam() creates each file exclusively with a random name, so nothing can be pre-planted at a
+		// predictable path; the intended upload name goes in 'name' for the sideload.
 		$cases = array(
-			array( 'label' => 'large PNG with alpha', 'file' => $this->make_png( $tmp_dir . 'lean-test-alpha.png', 3200, 2000, true ) ),
-			array( 'label' => 'JPEG', 'file' => $this->make_jpeg( $tmp_dir . 'lean-test-photo.jpg', 1800, 1200 ) ),
-			array( 'label' => 'opt-out token', 'file' => $this->make_png( $tmp_dir . 'lean-test-logo' . $settings['keep_token'] . '.png', 400, 200, true ), 'expect_keep' => true ),
+			array( 'label' => 'large PNG with alpha', 'name' => 'lean-test-alpha.png', 'file' => $this->make_png( wp_tempnam( 'lean-test-alpha' ), 3200, 2000, true, $created ) ),
+			array( 'label' => 'JPEG', 'name' => 'lean-test-photo.jpg', 'file' => $this->make_jpeg( wp_tempnam( 'lean-test-photo' ), 1800, 1200, $created ) ),
 		);
+		if ( '' !== (string) $settings['keep_token'] ) {
+			$cases[] = array( 'label' => 'opt-out token', 'name' => 'lean-test-logo' . $settings['keep_token'] . '.png', 'file' => $this->make_png( wp_tempnam( 'lean-test-logo' ), 400, 200, true, $created ), 'expect_keep' => true );
+		}
 
 		foreach ( $cases as $case ) {
 			$label = $case['label'];
@@ -77,7 +81,7 @@ final class CLI {
 				++$failures;
 				continue;
 			}
-			$file_array = array( 'name' => basename( $case['file'] ), 'tmp_name' => $case['file'] );
+			$file_array = array( 'name' => $case['name'], 'tmp_name' => $case['file'] );
 			$id         = media_handle_sideload( $file_array, 0 );
 			if ( is_wp_error( $id ) ) {
 				\WP_CLI::warning( "$label: sideload failed: " . $id->get_error_message() );
@@ -135,8 +139,10 @@ final class CLI {
 				\WP_CLI::warning( "$label: " . implode( '; ', $msgs ) );
 			}
 		}
-		foreach ( glob( $tmp_dir . 'lean-test-*' ) ?: array() as $leftover ) {
-			wp_delete_file( $leftover );
+		foreach ( $created as $path ) {
+			if ( file_exists( $path ) ) {
+				wp_delete_file( $path );
+			}
 		}
 		if ( $failures ) {
 			\WP_CLI::error( "$failures check(s) failed." );
@@ -240,10 +246,11 @@ final class CLI {
 
 	/* ------------------------------------------------------------ test image factories */
 
-	private function make_png( string $path, int $w, int $h, bool $alpha ) {
-		if ( ! function_exists( 'imagecreatetruecolor' ) ) {
+	private function make_png( $path, int $w, int $h, bool $alpha, array &$created ) {
+		if ( ! $path || ! function_exists( 'imagecreatetruecolor' ) ) {
 			return false;
 		}
+		$created[] = $path;
 		$im = imagecreatetruecolor( $w, $h );
 		if ( $alpha ) {
 			imagesavealpha( $im, true );
@@ -257,10 +264,11 @@ final class CLI {
 		return $ok ? $path : false;
 	}
 
-	private function make_jpeg( string $path, int $w, int $h ) {
-		if ( ! function_exists( 'imagecreatetruecolor' ) ) {
+	private function make_jpeg( $path, int $w, int $h, array &$created ) {
+		if ( ! $path || ! function_exists( 'imagecreatetruecolor' ) ) {
 			return false;
 		}
+		$created[] = $path;
 		$im = imagecreatetruecolor( $w, $h );
 		for ( $y = 0; $y < $h; $y += 4 ) {
 			imageline( $im, 0, $y, $w, $y, imagecolorallocate( $im, ( $y * 7 ) % 255, ( $y * 3 ) % 255, 200 ) );

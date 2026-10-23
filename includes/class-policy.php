@@ -7,14 +7,6 @@
 
 namespace LeanUploads;
 
-if ( ! function_exists( __NAMESPACE__ . '\\wp_normalize_path_compat' ) ) {
-	/** Backslashes to slashes, collapsed; WordPress-free so Policy stays unit-testable. */
-	function wp_normalize_path_compat( string $path ): string {
-		$path = str_replace( '\\', '/', $path );
-		return (string) preg_replace( '#/+#', '/', $path );
-	}
-}
-
 final class Policy {
 
 	/** Source mime types the plugin knows how to convert. Animated GIFs are detected separately; HEIC needs a capable decoder. */
@@ -154,24 +146,6 @@ final class Policy {
 	}
 
 	/**
-	 * Whether $candidate is the kept file itself or one of its derived files (same directory, same base name
-	 * followed by "-" or "."). Used to exempt opted-out uploads from thumbnail format mapping.
-	 */
-	public static function path_belongs_to( string $candidate, string $kept ): bool {
-		if ( '' === $candidate || '' === $kept ) {
-			return false;
-		}
-		$candidate = wp_normalize_path_compat( $candidate );
-		$kept      = wp_normalize_path_compat( $kept );
-		if ( dirname( $candidate ) !== dirname( $kept ) ) {
-			return false;
-		}
-		$cb = basename( $candidate );
-		$kb = pathinfo( $kept, PATHINFO_FILENAME );
-		return $cb === basename( $kept ) || 0 === strpos( $cb, $kb . '-' ) || 0 === strpos( $cb, $kb . '.' );
-	}
-
-	/**
 	 * Cheap animated-GIF detection: more than one Graphic Control Extension block.
 	 */
 	public static function is_animated_gif( string $path ): bool {
@@ -180,9 +154,12 @@ final class Policy {
 			return false;
 		}
 		$count = 0;
+		$tail  = '';
 		while ( ! feof( $fh ) && $count < 2 ) {
-			$chunk  = fread( $fh, 1024 * 100 );
+			// Carry the last bytes of the previous chunk so a marker straddling the boundary is still seen.
+			$chunk  = $tail . fread( $fh, 1024 * 100 );
 			$count += preg_match_all( '#\x00\x21\xF9\x04.{4}\x00[\x2C\x21]#s', $chunk );
+			$tail   = substr( $chunk, -10 );
 		}
 		fclose( $fh );
 		return $count > 1;

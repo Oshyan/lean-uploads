@@ -1,10 +1,10 @@
 === Lean Uploads ===
 Contributors: oshyan
 Tags: webp, avif, images, optimization, uploads
-Requires at least: 6.1
+Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.1.0
+Stable tag: 0.2.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -46,6 +46,11 @@ Not automatically. Run `wp lean-uploads convert --all --dry-run` to see what wou
 75 is the default and is visually transparent for photos. Raise it if you are picky, lower it if you are not.
 
 == Changelog ==
+
+= 0.2.0 =
+* Separate quality settings for WebP and AVIF.
+* Originals are only removed for uploads and for conversions you run; other regenerations never delete originals.
+* Safer bulk conversion (unique names, transactional metadata), uploads-directory containment, no technical detail in notices.
 
 = 0.1.0 =
 * First release.

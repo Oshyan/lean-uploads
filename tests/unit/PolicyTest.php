@@ -126,17 +126,6 @@ final class PolicyTest extends TestCase {
 		$this->assertSame( array( 1, 100 ), Policy::fit( 1, 20000, 100 ) );
 	}
 
-	public function test_path_belongs_to_matches_file_and_its_derivatives_only(): void {
-		$kept = '/srv/uploads/2026/10/logo.png';
-		$this->assertTrue( Policy::path_belongs_to( '/srv/uploads/2026/10/logo.png', $kept ) );
-		$this->assertTrue( Policy::path_belongs_to( '/srv/uploads/2026/10/logo-300x200.png', $kept ) );
-		$this->assertTrue( Policy::path_belongs_to( '/srv/uploads/2026/10/logo.webp', $kept ) );
-		$this->assertTrue( Policy::path_belongs_to( '\\srv\\uploads\\2026\\10\\logo-scaled.png', $kept ) );
-		$this->assertFalse( Policy::path_belongs_to( '/srv/uploads/2026/10/logotype.png', $kept ) );
-		$this->assertFalse( Policy::path_belongs_to( '/srv/uploads/2026/11/logo.png', $kept ) );
-		$this->assertFalse( Policy::path_belongs_to( '', $kept ) );
-	}
-
 	public function test_animated_gif_detection(): void {
 		$dir = sys_get_temp_dir();
 		$static = $dir . '/lean-static.gif';
@@ -154,5 +143,14 @@ final class PolicyTest extends TestCase {
 		$this->assertTrue( Policy::is_animated_gif( $animated ) );
 		unlink( $animated );
 		$this->assertFalse( Policy::is_animated_gif( $dir . '/does-not-exist.gif' ) );
+
+		// A frame marker split across the 100 KB read boundary must still be counted.
+		$split  = $dir . '/lean-split.gif';
+		$before = 1024 * 100 - 5; // the second marker starts 5 bytes before the boundary
+		$body   = 'GIF89a' . $frame; // first marker early
+		$body  .= str_repeat( 'x', $before - strlen( $body ) ) . $frame . str_repeat( 'y', 30 );
+		file_put_contents( $split, $body );
+		$this->assertTrue( Policy::is_animated_gif( $split ) );
+		unlink( $split );
 	}
 }

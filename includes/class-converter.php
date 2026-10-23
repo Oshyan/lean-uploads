@@ -109,65 +109,6 @@ final class Converter {
 	}
 
 	/**
-	 * Resize only (no format change): used for WebP/AVIF uploads that exceed the cap.
-	 *
-	 * @return array|\WP_Error Same shape as convert(), or WP_Error 'lean_uploads_no_resize' if nothing to do.
-	 */
-	public function resize_in_place( string $source, string $mime, int $quality, int $max ) {
-		$size = wp_getimagesize( $source );
-		if ( ! $size || null === Policy::fit( (int) $size[0], (int) $size[1], $max ) ) {
-			return new \WP_Error( 'lean_uploads_no_resize', 'Within cap.' );
-		}
-		$tmp = $source . '.lean-tmp';
-		$res = $this->convert( $source, $tmp, $mime, array( 'quality' => $quality, 'max_dimension' => $max ) );
-		if ( is_wp_error( $res ) ) {
-			return $res;
-		}
-		if ( ! copy( $tmp, $source ) ) {
-			wp_delete_file( $tmp );
-			return new \WP_Error( 'lean_uploads_copy', 'Could not replace the uploaded file.' );
-		}
-		wp_delete_file( $tmp );
-		$res['path'] = $source;
-		return $res;
-	}
-
-	/**
-	 * Try WordPress's preferred editor first, then any other capable editor.
-	 *
-	 * Imagick is usually first and usually best, but hosts cap its pixel cache (a 60-megapixel photo
-	 * exceeds a common 256MB policy and fails with "cache resources exhausted") while GD, slower but
-	 * frugal, gets the same job done. Core's own thumbnail generation has no such fallback.
-	 *
-	 * @param array{0:int,1:int}|null $fit
-	 * @return true|\WP_Error
-	 */
-	private function convert_with_editor( string $source, string $dest, string $target_mime, int $quality, ?array $fit, int $width = 0, int $height = 0 ) {
-		$errors  = array();
-		$classes = $this->editor_classes( $target_mime );
-		if ( $this->exceeds_imagick_cache( $width, $height ) ) {
-			// Don't spend seconds watching Imagick fail; GD first, Imagick as the fallback.
-			usort(
-				$classes,
-				static function ( $a, $b ) {
-					return (int) ( false !== stripos( $a, 'imagick' ) ) - (int) ( false !== stripos( $b, 'imagick' ) );
-				}
-			);
-		}
-		foreach ( $classes as $class ) {
-			$result = $this->convert_with_editor_class( $class, $source, $dest, $target_mime, $quality, $fit );
-			if ( ! is_wp_error( $result ) ) {
-				return true;
-			}
-			$errors[] = $class . ': ' . $result->get_error_message();
-			if ( file_exists( $dest ) ) {
-				wp_delete_file( $dest );
-			}
-		}
-		return new \WP_Error( 'lean_uploads_editor', $errors ? implode( ' / ', $errors ) : 'No image editor can write ' . $target_mime . '.' );
-	}
-
-	/**
 	 * Whether an image of these dimensions would blow past Imagick's configured pixel-cache limits.
 	 *
 	 * ImageMagick's pixel cache costs 8 bytes per pixel for Q16 builds and 16 for Q16 HDRI builds (the common

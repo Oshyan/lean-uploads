@@ -31,8 +31,9 @@ Under **Settings > Media**. There are intentionally few:
 | Setting | Default | Notes |
 |---|---|---|
 | Convert uploads | on | The master switch for originals. |
-| Output format | WebP | AVIF is offered when the server's image library can write it, and falls back to WebP if not. |
-| Quality | 75 | Lossy quality for originals and thumbnails. |
+| Output format | WebP | AVIF is offered when the server's image library can write it, and is only used if you choose it. Falls back to WebP if it turns out to be unavailable. |
+| WebP quality | 75 | Lossy quality for WebP originals and thumbnails. |
+| AVIF quality | 60 | AVIF's scale differs; 60 looks about like WebP 75. Only applies when AVIF is the output format. |
 | Maximum dimension | 2560 px | Longest side. 0 disables. |
 | Source formats | JPEG, PNG, BMP/TIFF on; GIF off | Lossless PNG conversion is available when Imagick is present. |
 | Thumbnails | on | Generate all sizes in the output format. |
@@ -63,6 +64,14 @@ wp lean-uploads convert 123 456
 WordPress 6.1 or newer, PHP 7.4 or newer, and an image library that can write WebP: Imagick or GD, which nearly every host has. AVIF needs WordPress 6.5 and a newer Imagick or GD build. The plugin refuses to activate if it can write neither format, rather than silently doing nothing.
 
 It uses WordPress's own image editor for the actual encoding, so it behaves the same as thumbnail generation does on your host and respects the `wp_image_editors` filter. Nothing depends on the web server: no `.htaccess` rules, no nginx config, no CDN cooperation. That's deliberate; hosts that serve static files straight from nginx (WP Engine, among others) break every rewrite-based WebP plugin, and this one doesn't care.
+
+## Safety properties
+
+- Originals are only removed for attachments the plugin was explicitly handed: new uploads, and attachments you convert through its own Media Library actions or WP-CLI command. Regenerations triggered any other way (core's own "create image subsizes" request, regeneration plugins, `wp media regenerate`) get thumbnails in the output format but never lose their original. That matters because core lets any user who can upload files trigger a regeneration of any attachment.
+- Every delete and rename is confined to the uploads directory, and file names from attachment metadata are reduced to their base name before use.
+- Target file names are claimed exclusively before anything is renamed over them, so two uploads differing only by extension cannot overwrite each other.
+- Bulk conversion is a transaction per attachment: if regeneration comes back incomplete, the previous metadata is restored and no file is deleted.
+- Failure notices show the file name only; technical detail goes to the error log (when `WP_DEBUG` is on) and the `lean_uploads_failed` action.
 
 ## What it doesn't do
 

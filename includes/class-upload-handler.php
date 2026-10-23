@@ -34,6 +34,7 @@ final class Upload_Handler {
 	 * @return array
 	 */
 	public function prefilter( $file ) {
+		$this->pending_keep = false; // an earlier upload that core then rejected must not leak its opt-out here
 		if ( ! is_array( $file ) || empty( $file['name'] ) || ! empty( $file['error'] ) ) {
 			return $file;
 		}
