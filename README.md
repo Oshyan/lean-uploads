@@ -81,6 +81,6 @@ Unit tests cover the decision logic and settings sanitization without needing a 
 
 ## Status
 
-Early. It's been exercised on a WP Engine development install (Imagick, WordPress 7.1) through the self-test, WP-CLI imports and the bulk converter; the browser upload path shares the same hook but has had less mileage. I'd particularly like to hear from anyone on a host where AVIF is available, or where the activation check refuses to run.
+Early. It's been exercised on two hosts (WP Engine and a self-managed CloudPanel VPS, both Imagick, WordPress 7.1): the self-test, WP-CLI imports, the bulk converter with URL rewriting, and real uploads through the browser uploader. I'd particularly like to hear from anyone on a GD-only host, or where the activation check refuses to run.
 
 License: GPL-2.0-or-later.
