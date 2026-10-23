@@ -60,9 +60,22 @@ final class Converter {
 		wp_raise_memory_limit( 'image' );
 
 		try {
-			if ( $lossless && 'image/webp' === $target_mime && $this->caps->imagick_can_write( 'WEBP' ) && ! $this->exceeds_imagick_cache( (int) $size[0], (int) $size[1] ) ) {
+			$result   = null;
+			$src_mime = (string) ( $size['mime'] ?? '' );
+			$too_big  = $this->exceeds_imagick_cache( (int) $size[0], (int) $size[1] );
+			if ( null !== $fit && $this->caps->has_imagick() && ( 'image/jpeg' === $src_mime || ! $too_big ) ) {
+				// Direct Imagick for resizes: JPEGs are decoded already downscaled (libjpeg DCT scaling, which also
+				// sidesteps the pixel-cache limit), and PNG output uses fast compression since an intermediate is
+				// temporary. The core editor would write PNG at level 9 and take four times as long. Falls through
+				// to the editor path on any failure.
+				$result = $this->convert_direct_imagick( $source, $dest, $target_mime, $quality, $max, 'image/jpeg' === $src_mime );
+				if ( is_wp_error( $result ) ) {
+					$result = null;
+				}
+			}
+			if ( null === $result && $lossless && 'image/webp' === $target_mime && $this->caps->imagick_can_write( 'WEBP' ) && ! $this->exceeds_imagick_cache( (int) $size[0], (int) $size[1] ) ) {
 				$result = $this->convert_lossless_imagick( $source, $dest, $fit );
-			} else {
+			} elseif ( null === $result ) {
 				$result = $this->convert_with_editor( $source, $dest, $target_mime, $quality, $fit, (int) $size[0], (int) $size[1] );
 			}
 		} catch ( \Throwable $e ) {
@@ -187,6 +200,9 @@ final class Converter {
 	 * @return string[]
 	 */
 	private function editor_classes( string $target_mime ): array {
+		if ( ! class_exists( 'WP_Image_Editor_GD', false ) && function_exists( '_wp_image_editor_choose' ) ) {
+			_wp_image_editor_choose(); // loads the core editor classes; they are not autoloaded
+		}
 		$classes = apply_filters( 'wp_image_editors', array( 'WP_Image_Editor_Imagick', 'WP_Image_Editor_GD' ) );
 		$usable  = array();
 		foreach ( (array) $classes as $class ) {
@@ -207,26 +223,35 @@ final class Converter {
 		$only = static function () use ( $class ) {
 			return array( $class );
 		};
+		// We name the output format explicitly; the site-wide output-format mapping (including this plugin's own,
+		// which turns PNG into WebP) must not second-guess it, or a lossless intermediate comes out lossy.
+		$no_mapping = static function () {
+			return array();
+		};
 		add_filter( 'wp_image_editors', $only, PHP_INT_MAX );
+		add_filter( 'image_editor_output_format', $no_mapping, PHP_INT_MAX );
 		try {
 			$editor = wp_get_image_editor( $source, array( 'mime_type' => $target_mime ) );
+			if ( is_wp_error( $editor ) ) {
+				return $editor;
+			}
+			if ( method_exists( $editor, 'maybe_exif_rotate' ) ) {
+				$editor->maybe_exif_rotate();
+			}
+			if ( null !== $fit ) {
+				// Fit within a square box: correct whichever way EXIF rotation just turned the image.
+				$box = max( $fit[0], $fit[1] );
+				$r   = $editor->resize( $box, $box, false );
+				if ( is_wp_error( $r ) ) {
+					return $r;
+				}
+			}
+			$editor->set_quality( $quality );
+			$saved = $editor->save( $dest, $target_mime );
 		} finally {
 			remove_filter( 'wp_image_editors', $only, PHP_INT_MAX );
+			remove_filter( 'image_editor_output_format', $no_mapping, PHP_INT_MAX );
 		}
-		if ( is_wp_error( $editor ) ) {
-			return $editor;
-		}
-		if ( method_exists( $editor, 'maybe_exif_rotate' ) ) {
-			$editor->maybe_exif_rotate();
-		}
-		if ( null !== $fit ) {
-			$r = $editor->resize( $fit[0], $fit[1], false );
-			if ( is_wp_error( $r ) ) {
-				return $r;
-			}
-		}
-		$editor->set_quality( $quality );
-		$saved = $editor->save( $dest, $target_mime );
 		if ( is_wp_error( $saved ) ) {
 			return $saved;
 		}
@@ -237,6 +262,52 @@ final class Converter {
 			}
 		}
 		return true;
+	}
+
+	/**
+	 * Resize with Imagick directly: optional libjpeg DCT-scaled decode (the "jpeg:size" hint), EXIF auto-orient,
+	 * Lanczos fit within the cap, fast PNG settings for intermediates, explicit quality for lossy targets.
+	 *
+	 * @return true|\WP_Error
+	 */
+	private function convert_direct_imagick( string $source, string $dest, string $target_mime, int $quality, int $max, bool $dct ) {
+		if ( ! $this->caps->has_imagick() || $max <= 0 ) {
+			return new \WP_Error( 'lean_uploads_no_imagick', 'Imagick unavailable.' );
+		}
+		$format = strtoupper( (string) ( Policy::EXT[ $target_mime ] ?? substr( strrchr( $target_mime, '/' ), 1 ) ) );
+		if ( ! $this->caps->imagick_can_write( $format ) ) {
+			return new \WP_Error( 'lean_uploads_imagick_format', "Imagick cannot write $format." );
+		}
+		$im = new \Imagick();
+		if ( $dct ) {
+			// libjpeg picks the smallest DCT scale (1/2, 1/4, 1/8) that still yields at least this size.
+			$im->setOption( 'jpeg:size', $max . 'x' . $max );
+		}
+		$im->readImage( $source );
+		if ( method_exists( $im, 'autoOrient' ) ) {
+			$im->autoOrient();
+		}
+		$fit = Policy::fit( $im->getImageWidth(), $im->getImageHeight(), $max );
+		if ( null !== $fit ) {
+			$im->resizeImage( $fit[0], $fit[1], \Imagick::FILTER_LANCZOS, 1 );
+		}
+		$im->setImageFormat( $format );
+		if ( 'PNG' === $format ) {
+			// Lossless either way; level 1 writes in a quarter of the time of WordPress's level 9.
+			$im->setOption( 'png:compression-level', '1' );
+			$im->setOption( 'png:compression-filter', '0' );
+		} else {
+			$im->setImageCompressionQuality( $quality );
+		}
+		// Drop EXIF/IPTC/XMP like core does, but keep the colour profile so wide-gamut sources don't shift.
+		$icc = $im->getImageProfiles( 'icc', true );
+		$im->stripImage();
+		if ( ! empty( $icc['icc'] ) ) {
+			$im->profileImage( 'icc', $icc['icc'] );
+		}
+		$ok = $im->writeImage( $dest );
+		$im->clear();
+		return $ok ? true : new \WP_Error( 'lean_uploads_imagick_write', 'Imagick could not write the file.' );
 	}
 
 	/**

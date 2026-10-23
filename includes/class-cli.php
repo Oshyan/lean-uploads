@@ -56,7 +56,7 @@ final class CLI {
 		require_once ABSPATH . 'wp-admin/includes/media.php';
 
 		$settings = $this->plugin->settings->get();
-		$target   = Policy::target_mime( $settings, $this->plugin->uploads->support_map() );
+		$target   = Policy::target_mime( $settings, $this->plugin->pipeline->support_map() );
 		if ( '' === $target ) {
 			\WP_CLI::error( 'This server cannot encode WebP or AVIF; nothing to test.' );
 		}
@@ -103,7 +103,7 @@ final class CLI {
 						break;
 					}
 				}
-				if ( ! get_post_meta( $id, Derivatives::KEEP_META, true ) ) {
+				if ( ! get_post_meta( $id, Pipeline::KEEP_META, true ) ) {
 					$ok = false; $msgs[] = 'keep flag not persisted on the attachment';
 				}
 			} else {

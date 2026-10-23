@@ -12,13 +12,15 @@ So this plugin does that, by default, for everyone, and gives you an escape hatc
 
 ## What it does
 
-- **Converts originals at upload time.** JPEG, PNG, BMP, TIFF and HEIC (where the server can decode it) become WebP (or AVIF where the server can encode it). The conversion happens before WordPress moves the file into the uploads folder, so the original never touches disk. Works for the Media Library, the block editor, the REST API, `media_sideload_image()`, and `wp media import`, because all of them go through the same core hook.
-- **Caps dimensions.** Anything larger than the maximum (default 2560px, the same threshold WordPress uses for its `-scaled` copies) is scaled down to fit before encoding. Set it to 0 to disable.
-- **Thumbnails in the same format.** Every registered image size is generated as WebP/AVIF at the same quality, including for images that were uploaded before the plugin or opted out.
+- **Converts originals.** JPEG, PNG, BMP, TIFF and HEIC (where the server can decode it) become WebP (or AVIF where the server can encode it). Works for the Media Library, the block editor, the REST API, `media_sideload_image()`, and `wp media import`, because all of them end in the same core function that generates image sizes.
+- **One generation, never two.** WordPress cuts the converted full-size image and every thumbnail from the uploaded original, each one encode away from the source. Only then is the original deleted. Thumbnails are never made from the already-compressed full size.
+- **Caps dimensions, efficiently.** Anything larger than the maximum (default 2560px, the same threshold WordPress uses for its `-scaled` copies) is resampled once, losslessly, to the cap, and everything is derived from that. A 60-megapixel upload is decoded exactly once; on hosts where Imagick cannot hold it, GD does that one decode. Set the cap to 0 to disable.
+- **Thumbnails in the same format.** Every registered image size is generated as WebP/AVIF at the same quality, including for images that were uploaded before the plugin.
+- **Metadata handled the WordPress way.** EXIF orientation is applied, IPTC/EXIF title, caption and camera data are read into the attachment before the original goes, and the stored files carry no EXIF.
 - **Already-efficient uploads are left alone.** WebP and AVIF are never re-encoded, only resized if they exceed the cap. SVG is never touched. Animated GIFs are never touched.
 - **An opt-out that teaches.** Put `--keep` anywhere in a file name and that file is stored exactly as uploaded, with the token removed from the saved name. `logo--keep.png` becomes `logo.png`, untouched, and its thumbnails stay PNG too. The attachment is flagged so later regenerations respect it.
 - **Never makes a file bigger.** If the converted file wouldn't be smaller and nothing was resized, the original is kept (filterable). Images above 120 megapixels are left alone rather than risk PHP's limits.
-- **Never blocks an upload.** If conversion fails for any reason, the original goes through and the uploader sees a notice saying so. When Imagick can't hold an image in its pixel cache, GD takes over automatically.
+- **Never blocks an upload.** If conversion fails for any reason, the original is kept and the uploader sees a notice saying so.
 - **Media Library integration.** A Format column shows each image's type and size with a one-click Convert link, plus a bulk action for selected images.
 - **Bulk conversion for the existing library** via WP-CLI, with a dry run and optional database-wide URL rewriting (serialization-safe, it delegates to `wp search-replace`).
 

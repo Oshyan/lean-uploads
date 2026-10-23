@@ -58,8 +58,8 @@ final class Plugin {
 	/** @var Upload_Handler */
 	public $uploads;
 
-	/** @var Derivatives */
-	public $derivatives;
+	/** @var Pipeline */
+	public $pipeline;
 
 	/** @var Notices */
 	public $notices;
@@ -82,9 +82,9 @@ final class Plugin {
 		$this->settings     = new Settings( $this->capabilities );
 		$this->notices      = new Notices();
 		$this->converter    = new Converter( $this->capabilities );
-		$this->uploads      = new Upload_Handler( $this->settings, $this->capabilities, $this->converter, $this->notices );
-		$this->derivatives  = new Derivatives( $this->settings, $this->capabilities );
-		$this->library      = new Library( $this->settings, $this->converter, $this->uploads );
+		$this->uploads      = new Upload_Handler( $this->settings );
+		$this->pipeline     = new Pipeline( $this->settings, $this->capabilities, $this->converter, $this->notices );
+		$this->library      = new Library( $this->settings, $this->pipeline );
 		$this->admin_media  = new Admin_Media( $this->library );
 	}
 
@@ -94,7 +94,7 @@ final class Plugin {
 		$this->settings->register_hooks();
 		$this->notices->register_hooks();
 		$this->uploads->register_hooks();
-		$this->derivatives->register_hooks();
+		$this->pipeline->register_hooks();
 		if ( is_admin() ) {
 			$this->admin_media->register_hooks();
 		}
