@@ -21,7 +21,7 @@ So this plugin does that, by default, for everyone, and gives you an escape hatc
 - **An opt-out that teaches.** Put `--keep` anywhere in a file name and that file is stored exactly as uploaded, with the token removed from the saved name. `logo--keep.png` becomes `logo.png`, untouched, and its thumbnails stay PNG too. The attachment is flagged so later regenerations respect it.
 - **Never makes a file bigger.** If the converted file wouldn't be smaller and nothing was resized, the original is kept (filterable). Images above 120 megapixels are left alone rather than risk PHP's limits.
 - **Never blocks an upload.** If conversion fails for any reason, the original is kept and the uploader sees a notice saying so.
-- **Media Library integration.** A Format column shows each image's type and size with a one-click Convert link, plus a bulk action for selected images.
+- **Media Library integration.** A Format column shows each image's type and size with a one-click Convert link, plus a bulk action for selected images (25 per request; the Tools page is for whole libraries).
 - **Bulk conversion of the existing library**, from Tools > Lean Uploads (scan, then convert in batches with a progress bar, pause and resume, dry run) or from WP-CLI. Each image is its own transaction. Old URLs in posts, meta and options can be rewritten to the new files; that rewrite is serialization-safe and never unserializes stored data (it walks the serialized format and fixes string lengths), so it cannot be used to instantiate objects.
 
 ## Install
@@ -43,7 +43,9 @@ Under **Settings > Media**. There are intentionally few:
 | Thumbnails | on | Generate all sizes in the output format. |
 | Opt-out token | `--keep` | Empty disables the escape hatch. |
 
-Developers get filters `lean_uploads_settings`, `lean_uploads_should_convert`, `lean_uploads_keep_smaller_original`, `lean_uploads_max_pixels`, and actions `lean_uploads_converted`, `lean_uploads_failed`, `lean_uploads_attachment_converted`.
+Developers get filters `lean_uploads_settings` (override any setting in code), `lean_uploads_keep_smaller_original` and `lean_uploads_max_pixels`, and actions `lean_uploads_converted` (an upload's original was replaced), `lean_uploads_attachment_converted` (an existing attachment was converted, with the old/new URL pairs) and `lean_uploads_failed`.
+
+Uninstalling removes the plugin's options, on every site of a network. Converted images stay converted; there is nothing to restore them from.
 
 ## How it compares
 
@@ -57,12 +59,13 @@ wp lean-uploads self-test
 wp lean-uploads scan
 wp lean-uploads convert --all --dry-run
 wp lean-uploads convert --all --update-references
+wp lean-uploads convert --all --limit=50
 wp lean-uploads convert 123 456
 ```
 
 `self-test` pushes generated images through the real upload pipeline into the Media Library, checks the results (format, extension, dimensions, thumbnail formats, opt-out), and deletes everything it created. Run it after activating on a new host.
 
-`scan` is the Tools page summary in text form. `convert` replaces each attachment's file in place, regenerates its sizes, deletes the old files, and with `--update-references` rewrites every old URL (original and each size) to the new one in the site's posts, meta and options. Do a `--dry-run` first and have a backup; this is a one-way door by design. The Tools page does the same thing in batches of five from the browser, and is the better choice for anyone without shell access.
+`scan` is the Tools page summary in text form. `convert` replaces each attachment's file in place, regenerates its sizes, deletes the old files, and with `--update-references` rewrites every old URL (original and each size) to the new one in the site's posts, meta and options; `--limit` stops after that many conversions, handy for doing a large library in sittings. Do a `--dry-run` first and have a backup; this is a one-way door by design. The Tools page does the same thing in batches of five from the browser, and is the better choice for anyone without shell access.
 
 ## Requirements
 

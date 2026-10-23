@@ -14,13 +14,15 @@ Converts uploaded images to WebP or AVIF, caps their dimensions, and generates t
 
 Lean Uploads treats the file you upload as what it is: a display copy. On upload, JPEG, PNG, BMP and TIFF images are converted to WebP (or AVIF where available), scaled down to a maximum size, and stored in that form. Every thumbnail size is generated in the same format. The original is not kept.
 
-* Conversion happens before WordPress moves the file into the uploads folder, so it covers the Media Library, the block editor, the REST API, sideloads and WP-CLI imports.
+* Conversion rides on WordPress's own image-size generation, so it covers the Media Library, the block editor, the REST API, sideloads and WP-CLI imports. The full size and every thumbnail are each one encode from the original; only then is the original removed.
+* HEIC uploads are converted too, where the server can decode them.
 * WebP, AVIF and SVG uploads are never re-encoded. Animated GIFs are never touched.
 * A file whose name contains `--keep` is stored exactly as uploaded.
 * If a conversion fails, the original goes through and you are told.
 * A file is never replaced with a larger one unless it was also resized.
 * The Media Library gets a Format column with a Convert link per image and a bulk action.
-* Tools > Lean Uploads converts the existing library in batches (scan, progress, pause, resume, dry run), optionally rewriting old URLs in content. `wp lean-uploads convert --all` does the same from the command line.
+* Tools > Lean Uploads converts the existing library in batches (scan, progress, pause, resume, dry run), optionally rewriting old URLs in posts, meta and options. `wp lean-uploads convert --all` does the same from the command line.
+* Originals are only removed for new uploads and for conversions you run yourself; regenerations triggered by other plugins or by core never delete an original.
 
 Nothing depends on the web server. No .htaccess or nginx rules, so it works on hosts that serve static files directly.
 
@@ -39,13 +41,16 @@ No. Keep your source files outside WordPress. Use the `--keep` token in a file n
 
 = Will my old images be converted? =
 
-Not automatically. Run `wp lean-uploads convert --all --dry-run` to see what would change, then without `--dry-run` to do it. Add `--update-references` to rewrite old URLs in content.
+Not automatically. Go to Tools > Lean Uploads, click Scan, tick Dry run and Start to see what would change, then run it for real. With WP-CLI: `wp lean-uploads convert --all --dry-run`, then without `--dry-run`; add `--update-references` to rewrite old URLs in content.
 
 = Which quality should I use? =
 
 75 is the default and is visually transparent for photos. Raise it if you are picky, lower it if you are not.
 
 == Changelog ==
+
+= 0.3.1 =
+* Fixes from a second security review: new uploads never reuse the base name of a converted earlier upload (core only checks the uploaded extension, so thumbnails could be overwritten); oversized originals are moved aside and put back if a conversion fails; originals are kept when no thumbnails can be generated; bulk conversion of core-scaled attachments converts from the true original; URL rewriting is bounded, boundary-aware and limited to upload URLs; bulk runs take a lock and save progress per image.
 
 = 0.3.0 =
 * Tools > Lean Uploads: scan and convert the existing library in batches, with pause, resume and dry run.

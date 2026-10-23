@@ -14,9 +14,11 @@ if ( is_multisite() ) {
 		switch_to_blog( (int) $lean_uploads_site_id );
 		delete_option( 'lean_uploads' );
 		delete_option( 'lean_uploads_bulk' );
+		delete_option( 'lean_uploads_bulk_lock' );
 		restore_current_blog();
 	}
 } else {
 	delete_option( 'lean_uploads' );
 	delete_option( 'lean_uploads_bulk' );
+	delete_option( 'lean_uploads_bulk_lock' );
 }
