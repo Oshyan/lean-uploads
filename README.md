@@ -24,6 +24,10 @@ So this plugin does that, by default, for everyone, and gives you an escape hatc
 - **Media Library integration.** A Format column shows each image's type and size with a one-click Convert link, plus a bulk action for selected images.
 - **Bulk conversion of the existing library**, from Tools > Lean Uploads (scan, then convert in batches with a progress bar, pause and resume, dry run) or from WP-CLI. Each image is its own transaction. Old URLs in posts, meta and options can be rewritten to the new files; that rewrite is serialization-safe and never unserializes stored data (it walks the serialized format and fixes string lengths), so it cannot be used to instantiate objects.
 
+## Install
+
+Download the repository as a zip (or clone it into `wp-content/plugins/lean-uploads`), activate it under Plugins, and run `wp lean-uploads self-test` if you have WP-CLI. From then on every new upload is converted. Existing images are untouched until you convert them from Tools > Lean Uploads, the Media Library, or WP-CLI; do a dry run first, and have a backup, because originals are replaced.
+
 ## Settings
 
 Under **Settings > Media**. There are intentionally few:
@@ -62,7 +66,7 @@ wp lean-uploads convert 123 456
 
 ## Requirements
 
-WordPress 6.1 or newer, PHP 7.4 or newer, and an image library that can write WebP: Imagick or GD, which nearly every host has. AVIF needs WordPress 6.5 and a newer Imagick or GD build. The plugin refuses to activate if it can write neither format, rather than silently doing nothing.
+WordPress 6.5 or newer, PHP 7.4 or newer, and an image library that can write WebP: Imagick or GD, which nearly every host has. AVIF needs a newer Imagick or GD build. The plugin refuses to activate if it can write neither format, rather than silently doing nothing.
 
 It uses WordPress's own image editor for the actual encoding, so it behaves the same as thumbnail generation does on your host and respects the `wp_image_editors` filter. Nothing depends on the web server: no `.htaccess` rules, no nginx config, no CDN cooperation. That's deliberate; hosts that serve static files straight from nginx (WP Engine, among others) break every rewrite-based WebP plugin, and this one doesn't care.
 
