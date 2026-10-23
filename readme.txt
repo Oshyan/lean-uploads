@@ -4,7 +4,7 @@ Tags: webp, avif, images, optimization, uploads
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.2.0
+Stable tag: 0.3.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -20,7 +20,7 @@ Lean Uploads treats the file you upload as what it is: a display copy. On upload
 * If a conversion fails, the original goes through and you are told.
 * A file is never replaced with a larger one unless it was also resized.
 * The Media Library gets a Format column with a Convert link per image and a bulk action.
-* `wp lean-uploads convert --all` converts the existing library in place, with a dry run and optional URL rewriting across the database.
+* Tools > Lean Uploads converts the existing library in batches (scan, progress, pause, resume, dry run), optionally rewriting old URLs in content. `wp lean-uploads convert --all` does the same from the command line.
 
 Nothing depends on the web server. No .htaccess or nginx rules, so it works on hosts that serve static files directly.
 
@@ -46,6 +46,10 @@ Not automatically. Run `wp lean-uploads convert --all --dry-run` to see what wou
 75 is the default and is visually transparent for photos. Raise it if you are picky, lower it if you are not.
 
 == Changelog ==
+
+= 0.3.0 =
+* Tools > Lean Uploads: scan and convert the existing library in batches, with pause, resume and dry run.
+* URL rewriting after conversion works from the admin as well as WP-CLI, serialization-safe.
 
 = 0.2.0 =
 * Separate quality settings for WebP and AVIF.

@@ -3,7 +3,7 @@
  * Plugin Name:       Lean Uploads
  * Plugin URI:        https://github.com/oshyan/lean-uploads
  * Description:       Converts uploaded images to WebP (or AVIF), caps their dimensions, and generates every thumbnail in the same efficient format. The original upload is replaced, not kept beside it.
- * Version:           0.2.0
+ * Version:           0.3.0
  * Requires at least: 6.5
  * Requires PHP:      7.4
  * Author:            Oshyan Greene
@@ -18,7 +18,7 @@ namespace LeanUploads;
 
 defined( 'ABSPATH' ) || exit;
 
-const VERSION     = '0.2.0';
+const VERSION     = '0.3.0';
 const OPTION      = 'lean_uploads';
 const PLUGIN_FILE = __FILE__;
 
@@ -64,11 +64,20 @@ final class Plugin {
 	/** @var Notices */
 	public $notices;
 
+	/** @var Rewriter */
+	public $rewriter;
+
 	/** @var Library */
 	public $library;
 
+	/** @var Bulk */
+	public $bulk;
+
 	/** @var Admin_Media */
 	public $admin_media;
+
+	/** @var Admin_Tools */
+	public $admin_tools;
 
 	public static function instance(): Plugin {
 		if ( null === self::$instance ) {
@@ -84,8 +93,11 @@ final class Plugin {
 		$this->converter    = new Converter( $this->capabilities );
 		$this->uploads      = new Upload_Handler( $this->settings );
 		$this->pipeline     = new Pipeline( $this->settings, $this->capabilities, $this->converter, $this->notices );
-		$this->library      = new Library( $this->settings, $this->pipeline );
+		$this->rewriter     = new Rewriter();
+		$this->library      = new Library( $this->settings, $this->pipeline, $this->rewriter );
+		$this->bulk         = new Bulk( $this->library );
 		$this->admin_media  = new Admin_Media( $this->library );
+		$this->admin_tools  = new Admin_Tools( $this->bulk );
 	}
 
 	public function boot(): void {
@@ -97,6 +109,8 @@ final class Plugin {
 		$this->pipeline->register_hooks();
 		if ( is_admin() ) {
 			$this->admin_media->register_hooks();
+			$this->admin_tools->register_hooks();
+			$this->bulk->register_hooks();
 		}
 
 		add_filter( 'plugin_action_links_' . plugin_basename( PLUGIN_FILE ), array( $this, 'action_links' ) );

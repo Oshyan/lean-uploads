@@ -151,6 +151,21 @@ final class CLI {
 	}
 
 	/**
+	 * Shows what the library contains and what a bulk conversion would do to it.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp lean-uploads scan
+	 */
+	public function scan(): void {
+		$summary = $this->plugin->bulk->summary();
+		$labels  = array( 'convert' => 'would be converted', 'resize' => 'would be resized to the cap', 'skip' => 'would be left alone', 'missing' => 'file missing' );
+		foreach ( $summary as $key => $row ) {
+			\WP_CLI::log( sprintf( '  %-30s %6d images  %s', $labels[ $key ] ?? $key, $row['count'], size_format( $row['bytes'] ) ) );
+		}
+	}
+
+	/**
 	 * Converts existing Media Library images in place.
 	 *
 	 * Replaces each attachment's file with the converted version, regenerates its thumbnails, deletes the
@@ -171,7 +186,7 @@ final class CLI {
 	 * : Report what would change without touching anything.
 	 *
 	 * [--update-references]
-	 * : After converting, rewrite old file URLs to the new ones in all tables (serialization-safe, via search-replace).
+	 * : After converting, rewrite old file URLs to the new ones in posts, meta and options (serialization-safe).
 	 *
 	 * ## EXAMPLES
 	 *
@@ -230,13 +245,9 @@ final class CLI {
 			}
 			++$done;
 			$saved += $r['bytes_before'] - $r['bytes_after'];
-			\WP_CLI::log( sprintf( '#%d %s -> %s (%s -> %s)', $id, $r['old_name'], $r['new_name'], size_format( $r['bytes_before'] ), size_format( $r['bytes_after'] ) ) );
+			\WP_CLI::log( sprintf( '#%d %s -> %s (%s -> %s)%s', $id, $r['old_name'], $r['new_name'], size_format( $r['bytes_before'] ), size_format( $r['bytes_after'] ), $refs ? sprintf( ', %d rows updated', (int) $r['rows'] ) : '' ) );
 		}
 		$bar->finish();
-		if ( Library::needs_cache_flush() ) {
-			Library::flush_cache_if_needed();
-			\WP_CLI::log( 'Object cache flushed (references were rewritten).' );
-		}
 		if ( $dry ) {
 			\WP_CLI::success( sprintf( '%d would be processed, %d skipped (dry run).', $done, $skipped ) );
 		} else {

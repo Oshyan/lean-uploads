@@ -21,27 +21,16 @@ final class Library {
 	/** @var Pipeline */
 	private $pipeline;
 
-	/** @var bool Set once references were rewritten by direct SQL; a persistent object cache then holds stale posts. */
-	private static $cache_dirty = false;
+	/** @var Rewriter */
+	private $rewriter;
 
 	/** @var array<int,array|\WP_Error> Per-request memo for inspect(), the Media Library asks several times per row. */
 	private static $inspected = array();
 
-	public function __construct( Settings $settings, Pipeline $pipeline ) {
+	public function __construct( Settings $settings, Pipeline $pipeline, Rewriter $rewriter ) {
 		$this->settings = $settings;
 		$this->pipeline = $pipeline;
-	}
-
-	/** Whether callers should flush the object cache after a run (search-replace writes bypass it). */
-	public static function needs_cache_flush(): bool {
-		return self::$cache_dirty;
-	}
-
-	public static function flush_cache_if_needed(): void {
-		if ( self::$cache_dirty ) {
-			wp_cache_flush();
-			self::$cache_dirty = false;
-		}
+		$this->rewriter = $rewriter;
 	}
 
 	/**
@@ -121,8 +110,8 @@ final class Library {
 	 * Convert (or resize) one attachment in place.
 	 *
 	 * @param int  $id                Attachment ID.
-	 * @param bool $update_references Rewrite old URLs via `wp search-replace` (WP-CLI only; ignored elsewhere).
-	 * @return array{old_name:string,new_name:string,bytes_before:int,bytes_after:int,urls:array}|\WP_Error
+	 * @param bool $update_references Rewrite old URLs to the new ones across the site's content, meta and options.
+	 * @return array{old_name:string,new_name:string,bytes_before:int,bytes_after:int,urls:array,rows:int}|\WP_Error
 	 */
 	public function convert_attachment( int $id, bool $update_references = false ) {
 		$info = $this->inspect( $id, true );
@@ -166,7 +155,16 @@ final class Library {
 		$complete = is_array( $new_meta ) && ! empty( $new_meta['file'] )
 			&& ( empty( $old_meta['sizes'] ) || ! empty( $new_meta['sizes'] ) );
 		if ( ! $complete || ( $new_path === $original && 'convert' === $info['action'] ) ) {
-			// Core already stored partial metadata while working; put the previous state back and touch no files.
+			// Not converting after all (regeneration incomplete, conversion failed, or the converted file would not
+			// have been smaller). Put the previous state back: remove any new files core produced that the old
+			// metadata does not reference, undo the unique-name move, restore the old metadata.
+			if ( is_array( $new_meta ) ) {
+				foreach ( $this->all_files( $new_path ?: $original, $new_meta ) as $new_file ) {
+					if ( $new_file !== $original && $new_file !== $info['path'] && ! in_array( $new_file, $old_files, true ) ) {
+						Pipeline::delete_in_uploads( $new_file );
+					}
+				}
+			}
 			if ( $original !== $info['path'] && file_exists( $original ) ) {
 				rename( $original, $info['path'] ); // undo the unique-name move
 				update_attached_file( $id, $info['path'] );
@@ -192,8 +190,9 @@ final class Library {
 				$pairs[ $old_url ] = $new_url;
 			}
 		}
+		$rows = 0;
 		if ( $update_references && $pairs ) {
-			$this->rewrite_references( $pairs );
+			$rows = $this->rewriter->rewrite( $pairs );
 		}
 		unset( self::$inspected[ $id ] );
 
@@ -211,6 +210,7 @@ final class Library {
 			'bytes_before' => (int) $info['bytes'],
 			'bytes_after'  => (int) wp_filesize( $new_path ),
 			'urls'         => $pairs,
+			'rows'         => $rows,
 		);
 	}
 
@@ -248,26 +248,4 @@ final class Library {
 		return $out;
 	}
 
-	/**
-	 * Serialization-safe URL rewriting by delegating to `wp search-replace` (current site's tables only).
-	 * Only available under WP-CLI; in the admin we leave content alone and say so.
-	 *
-	 * @param array<string,string> $pairs old => new.
-	 */
-	private function rewrite_references( array $pairs ): void {
-		if ( ! ( defined( 'WP_CLI' ) && WP_CLI ) ) {
-			return;
-		}
-		foreach ( $pairs as $old_url => $new_url ) {
-			$r = \WP_CLI::runcommand(
-				sprintf( 'search-replace %s %s --skip-columns=guid --report=0 --quiet', escapeshellarg( $old_url ), escapeshellarg( $new_url ) ),
-				array( 'exit_error' => false, 'launch' => false, 'return' => 'all' )
-			);
-			// search-replace writes straight to the database; on hosts with a persistent object cache the
-			// cached copies of those rows are stale until the cache is flushed.
-			if ( is_object( $r ) && isset( $r->stdout ) && ! preg_match( '/Made 0 replacements/', (string) $r->stdout ) ) {
-				self::$cache_dirty = true;
-			}
-		}
-	}
 }

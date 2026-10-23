@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- Tools > Lean Uploads: scan the library, convert it in batches from the browser with progress, pause/resume and dry run (administrators only)
+- URL rewriting in PHP for both the Tools page and WP-CLI: serialization-safe without unserializing stored data, scoped to the current site, with targeted cache invalidation instead of a global flush
+- `wp lean-uploads scan`
+
 ## 0.2.0
 
 - per-format quality: separate WebP and AVIF settings (the old single value migrates to WebP)

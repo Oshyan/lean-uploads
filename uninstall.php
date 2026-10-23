@@ -13,8 +13,10 @@ if ( is_multisite() ) {
 	foreach ( get_sites( array( 'fields' => 'ids', 'number' => 0 ) ) as $lean_uploads_site_id ) {
 		switch_to_blog( (int) $lean_uploads_site_id );
 		delete_option( 'lean_uploads' );
+		delete_option( 'lean_uploads_bulk' );
 		restore_current_blog();
 	}
 } else {
 	delete_option( 'lean_uploads' );
+	delete_option( 'lean_uploads_bulk' );
 }
