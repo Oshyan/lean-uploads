@@ -1,7 +1,7 @@
 <?php
 /**
  * Plugin Name:       Lean Uploads
- * Plugin URI:        https://github.com/oshyan/lean-uploads
+ * Plugin URI:        https://github.com/Oshyan/lean-uploads
  * Description:       Converts uploaded images to WebP (or AVIF), caps their dimensions, and generates every thumbnail in the same efficient format. The original upload is replaced, not kept beside it.
  * Version:           0.3.1
  * Requires at least: 6.5
