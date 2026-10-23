@@ -1,0 +1,19 @@
+{
+    "name": "oshyan/lean-uploads",
+    "description": "WordPress plugin: convert uploads to WebP/AVIF, cap dimensions, generate thumbnails in the same format. Replaces the original instead of keeping it.",
+    "type": "wordpress-plugin",
+    "license": "GPL-2.0-or-later",
+    "require": {
+        "php": ">=7.4"
+    },
+    "require-dev": {
+        "phpunit/phpunit": "^9.6 || ^10.5 || ^11.0"
+    },
+    "scripts": {
+        "test": "phpunit",
+        "lint": "for f in lean-uploads.php uninstall.php includes/*.php; do php -l \"$f\" || exit 1; done"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

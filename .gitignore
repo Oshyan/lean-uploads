@@ -1,0 +1,8 @@
+/vendor/
+/node_modules/
+/.phpunit.cache/
+/.phpunit.result.cache
+/phpunit.xml
+/*.zip
+.DS_Store
+.fastembed_cache/
