@@ -14,6 +14,7 @@ final class SettingsTest extends TestCase {
 		$this->assertSame( 75, $d['webp_quality'] );
 		$this->assertSame( 60, $d['avif_quality'] );
 		$this->assertTrue( $d['enforce_quality'] );
+		$this->assertSame( 'preserve', $d['color_mode'] );
 		$this->assertSame( 2560, $d['max_dimension'] );
 		$this->assertTrue( $d['convert_png'] );
 		$this->assertTrue( $d['convert_jpeg'] );
@@ -80,4 +81,11 @@ final class SettingsTest extends TestCase {
 		$this->assertFalse( Settings::sanitize( array( 'enforce_quality' => 'false' ) )['enforce_quality'] );
 		$this->assertTrue( Settings::sanitize_form( array( 'enforce_quality' => '1' ) )['enforce_quality'] );
 	}
+	public function test_color_mode_requires_explicit_opt_in(): void {
+		$this->assertSame( 'preserve', Settings::sanitize( array() )['color_mode'] );
+		$this->assertSame( 'preserve', Settings::sanitize( array( 'color_mode' => 'strip' ) )['color_mode'] );
+		$this->assertSame( 'srgb', Settings::sanitize( array( 'color_mode' => 'srgb' ) )['color_mode'] );
+		$this->assertSame( 'preserve', Settings::sanitize_form( array() )['color_mode'] );
+	}
+
 }

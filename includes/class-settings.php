@@ -35,6 +35,7 @@ final class Settings {
 			'webp_quality'  => 75,
 			'avif_quality'  => 60,
 			'enforce_quality' => true,
+			'color_mode'    => 'preserve',
 			'max_dimension' => 2560,
 			'convert_jpeg'  => true,
 			'convert_png'   => true,
@@ -98,6 +99,7 @@ final class Settings {
 			'webp_quality'  => $clamp( 'webp_quality', 1, 100 ),
 			'avif_quality'  => $clamp( 'avif_quality', 1, 100 ),
 			'enforce_quality' => $bool( 'enforce_quality' ),
+			'color_mode'    => ( isset( $input['color_mode'] ) && 'srgb' === $input['color_mode'] ) ? 'srgb' : 'preserve',
 			'max_dimension' => $clamp( 'max_dimension', 0, 20000 ),
 			'convert_jpeg'  => $bool( 'convert_jpeg' ),
 			'convert_png'   => $bool( 'convert_png' ),
@@ -140,6 +142,7 @@ final class Settings {
 			'webp_quality'  => __( 'WebP quality', 'lean-uploads' ),
 			'avif_quality'  => __( 'AVIF quality', 'lean-uploads' ),
 			'enforce_quality' => __( 'Quality priority', 'lean-uploads' ),
+			'color_mode'    => __( 'Color profiles', 'lean-uploads' ),
 			'max_dimension' => __( 'Maximum dimension', 'lean-uploads' ),
 			'types'         => __( 'Source formats', 'lean-uploads' ),
 			'derivatives'   => __( 'Thumbnails', 'lean-uploads' ),
@@ -243,6 +246,15 @@ final class Settings {
 		$this->checkbox( 'enforce_quality', __( 'Enforce Lean Uploads quality over theme and plugin filters', 'lean-uploads' ), __( 'Enabled by default for WebP and AVIF processing. Turn off to let later WordPress quality filters override these settings. JPEG quality, explicit lossless encoding and unrelated image edits are not changed.', 'lean-uploads' ) );
 	}
 
+	public function field_color_mode(): void {
+		$v = $this->get();
+		printf( '<select id="lean_uploads_color_mode" name="%s[color_mode]">', esc_attr( OPTION ) );
+		printf( '<option value="preserve" %s>%s</option>', selected( $v['color_mode'], 'preserve', false ), esc_html__( 'Preserve embedded profiles (default)', 'lean-uploads' ) );
+		printf( '<option value="srgb" %s>%s</option>', selected( $v['color_mode'], 'srgb', false ), esc_html__( 'Convert to sRGB when needed', 'lean-uploads' ) );
+		echo '</select>';
+		echo '<p class="description">' . esc_html__( 'Preserves embedded ICC profiles and verifies saved files. Tagged images require a color-capable Imagick editor; unsafe GD fallback is blocked. Optional sRGB conversion transforms pixels using the embedded source profile, only when it differs from sRGB. Untagged images are not guessed. Applies to new uploads and explicit conversions, not automatically to the existing library. Use the separate Media Library sRGB action for existing files. Keep your source files: sRGB can reduce wide-gamut colors.', 'lean-uploads' ) . '</p>';
+	}
+
 	public function field_max_dimension(): void {
 		$this->number( 'max_dimension', 0, 20000, 'px' );
 		echo '<p class="description">' . esc_html__( 'Images larger than this on either side are scaled down to fit, before conversion. 0 disables. 2560 matches the threshold WordPress itself uses to create "-scaled" copies, so with the default nothing larger than that is ever stored.', 'lean-uploads' ) . '</p>';
@@ -258,7 +270,7 @@ final class Settings {
 		$this->checkbox( 'convert_gif', __( 'GIF (static only; animated GIFs are always left alone)', 'lean-uploads' ) );
 		echo '<br>';
 		$this->checkbox( 'convert_other', __( 'BMP, TIFF and HEIC (HEIC needs a decoder on the server)', 'lean-uploads' ) );
-		echo '<p class="description">' . esc_html__( 'SVG, WebP and AVIF uploads are never re-encoded. WebP and AVIF are still resized to the cap.', 'lean-uploads' ) . '</p>';
+		echo '<p class="description">' . esc_html__( 'SVG uploads are never re-encoded. WebP and AVIF are only re-encoded for resizing or opt-in sRGB conversion.', 'lean-uploads' ) . '</p>';
 	}
 
 	public function field_derivatives(): void {

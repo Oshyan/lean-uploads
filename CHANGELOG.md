@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0
+
+- Preserve embedded ICC profiles by default across plugin conversion, temporary resizes and generated sizes; verify saved profiles and block unsafe GD fallback.
+- Add opt-in true sRGB upload normalization and separate selective normalization of existing attachment files from the Media Library and WP-CLI.
+- Stage existing-file normalization with verification, shared attachment locking, rollback and an interruption recovery journal.
+- Preserve outer attachment context during nested thumbnail generation and retain originals when color validation fails.
+- Correct palette-index depth being reused as RGB/alpha channel depth during tagged indexed-PNG resizing; retain a reproducible visual example with independently checked saved files.
+- Add synthetic profile fixtures and regression coverage for preservation, normalization, unchanged files and failure recovery.
+
 ## 0.4.0
 
 - Default-on quality enforcement for WebP/AVIF processing prevents theme quality filters from silently replacing configured quality; Settings > Media provides an opt-out. JPEG quality and unrelated image editors are untouched.

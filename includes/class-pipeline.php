@@ -61,6 +61,7 @@ final class Pipeline {
 	}
 
 	public function register_hooks(): void {
+		add_filter( 'wp_image_editors', array( Color_Profiles::class, 'filter_editors' ), PHP_INT_MAX );
 		add_filter( 'image_editor_output_format', array( $this, 'output_format' ), 20, 3 );
 		add_filter( 'wp_editor_set_quality', array( $this, 'quality' ), 20, 2 );
 		add_filter( 'wp_editor_set_quality', array( $this, 'enforce_quality' ), PHP_INT_MAX, 2 );
@@ -170,9 +171,33 @@ final class Pipeline {
 			'intermediate' => '', // path of the lossless intermediate standing in for an oversized original
 			'aside'        => '', // where the true original was moved while the intermediate stands in for it
 			'done'         => false,
+			'color_token'  => null,
+			'color_needed' => false,
 			'source_mime'  => (string) ( $imagesize['mime'] ?? '' ),
+			'source_file'  => $file,
+			'source_width' => (int) ( $imagesize[0] ?? 0 ),
+			'source_height'=> (int) ( $imagesize[1] ?? 0 ),
 		);
 		$s = $this->settings->get();
+		$owned = self::$current['intended'] && ! empty( $s['enabled'] );
+		if ( ! $kept && ( $owned || ! empty( $s['derivatives'] ) ) && self::within_uploads( $file ) ) {
+			// Re-append after other plugins: only color-managed work is restricted to our safe editor.
+			remove_filter( 'wp_image_editors', array( Color_Profiles::class, 'filter_editors' ), PHP_INT_MAX );
+			add_filter( 'wp_image_editors', array( Color_Profiles::class, 'filter_editors' ), PHP_INT_MAX );
+			$decision = Policy::decide( (string) ( $imagesize['mime'] ?? '' ), basename( $file ), array_merge( $s, array( 'keep_token' => '' ) ), $this->support_map() );
+			$color_allowed = $decision['convert'] || in_array( (string) ( $imagesize['mime'] ?? '' ), Policy::MODERN, true );
+			$mode = $owned && $color_allowed ? $s['color_mode'] : 'preserve';
+			self::$current['color_token'] = Color_Profiles::push_context( $file, $mode );
+			$error = Color_Profiles::context_error();
+			if ( $error ) {
+				return false; // The errored context also blocks core's unsafe fallback editor.
+			}
+			if ( 'srgb' === $mode ) {
+				$profile = Color_Profiles::inspect( $file );
+				self::$current['color_needed'] = ! is_wp_error( $profile ) && $profile['has_icc'] && ! $profile['is_srgb']
+					&& ( $decision['convert'] || in_array( (string) ( $imagesize['mime'] ?? '' ), Policy::MODERN, true ) );
+			}
+		}
 		if ( $kept || empty( $s['enabled'] ) || ! self::$current['intended'] || ! self::within_uploads( $file ) ) {
 			return $threshold; // not ours: core's own behaviour, untouched
 		}
@@ -194,10 +219,10 @@ final class Pipeline {
 		}
 
 		$max = (int) $s['max_dimension'];
-		if ( $max <= 0 ) {
+		if ( $max <= 0 && ! self::$current['color_needed'] ) {
 			return $threshold;
 		}
-		if ( null === Policy::fit( $w, $h, $max ) ) {
+		if ( null === Policy::fit( $w, $h, $max ) && ! self::$current['color_needed'] ) {
 			return $max; // within the cap: core proceeds normally with our cap as its threshold
 		}
 
@@ -216,7 +241,7 @@ final class Pipeline {
 			self::delete_in_uploads( $aside );
 			return $max;
 		}
-		$res = $this->converter->convert( $file, $tmp, self::INTERMEDIATE_MIME, array( 'quality' => 100, 'max_dimension' => $max ) );
+		$res = $this->converter->convert( $file, $tmp, self::INTERMEDIATE_MIME, array( 'quality' => 100, 'max_dimension' => $max, 'color_mode' => self::$current['color_needed'] ? 'srgb' : 'preserve' ) );
 		if ( is_wp_error( $res ) || ! rename( $file, $aside ) ) {
 			self::delete_in_uploads( $tmp );
 			self::delete_in_uploads( $aside );
@@ -248,6 +273,9 @@ final class Pipeline {
 				rename( $c['aside'], $c['intermediate'] ); // not converted: the true original goes back where it was
 				clearstatcache( true, $c['intermediate'] );
 			}
+		}
+		if ( $c && isset( $c['color_token'] ) ) {
+			Color_Profiles::pop_context( $c['color_token'] );
 		}
 		self::$current = null;
 		if ( null !== self::$gd_first ) {
@@ -283,7 +311,8 @@ final class Pipeline {
 		if ( ! $full && empty( $s['derivatives'] ) ) {
 			return $formats;
 		}
-		$target = Policy::target_mime( $s, $this->support_map() );
+		$target = $c && '' !== $c['intermediate'] && in_array( $c['source_mime'], Policy::MODERN, true )
+			? $c['source_mime'] : Policy::target_mime( $s, $this->support_map() );
 		if ( '' === $target ) {
 			return $formats;
 		}
@@ -357,7 +386,16 @@ final class Pipeline {
 	public function finalize( $metadata, $attachment_id, $context = 'create' ) {
 		$attachment_id = (int) $attachment_id;
 		$c             = self::$current;
+		if ( self::$finalizing ) {
+			return $metadata; // Nested generation belongs to the outer record and must not unwind it.
+		}
+		if ( $c && $c['id'] !== $attachment_id ) {
+			return $metadata;
+		}
 		try {
+			if ( $c && isset( $c['color_token'] ) && Color_Profiles::context_error() ) {
+				return $this->color_failure_metadata( $metadata, $attachment_id, $c );
+			}
 			if ( self::$finalizing || ! is_array( $metadata ) || empty( $metadata['file'] ) || ! wp_attachment_is_image( $attachment_id ) ) {
 				return $metadata;
 			}
@@ -368,10 +406,34 @@ final class Pipeline {
 			if ( empty( $s['enabled'] ) ) {
 				return $metadata;
 			}
-			return $this->finish( $metadata, $attachment_id, $s, $c );
+			$metadata = $this->finish( $metadata, $attachment_id, $s, $c );
+			return isset( $c['color_token'] ) && Color_Profiles::context_error()
+				? $this->color_failure_metadata( $metadata, $attachment_id, $c ) : $metadata;
 		} finally {
 			self::end_attachment();
 		}
+	}
+
+	/** Restore the source pointer before end_attachment() restores any temporary stand-in. */
+	private function color_failure_metadata( $metadata, int $attachment_id, array $c ) {
+		$error = Color_Profiles::context_error();
+		$this->notices->add_failure( basename( (string) get_attached_file( $attachment_id, true ) ), $error );
+		do_action( 'lean_uploads_failed', array( 'id' => $attachment_id ), $error );
+		if ( $c['intended'] && is_array( $metadata ) && ! empty( $c['source_file'] ) ) {
+			// Core may already have changed the attached full-size pointer before a sub-size failed.
+			// Repoint to the true upload; end_attachment restores the temporary stand-in afterward.
+			$failed_full = get_attached_file( $attachment_id, true );
+			update_attached_file( $attachment_id, $c['source_file'] );
+			$metadata['file'] = _wp_relative_upload_path( $c['source_file'] );
+			$metadata['width'] = $c['source_width'];
+			$metadata['height'] = $c['source_height'];
+			$metadata['filesize'] = wp_filesize( $c['aside'] ?: $c['source_file'] );
+			unset( $metadata['original_image'] );
+			if ( $failed_full && $failed_full !== $c['source_file'] ) {
+				self::delete_in_uploads( $failed_full );
+			}
+		}
+		return $metadata;
 	}
 
 	/**
@@ -400,6 +462,10 @@ final class Pipeline {
 		$support  = $this->support_map();
 		$animated = ( 'image/gif' === $orig_mime ) && Policy::is_animated_gif( $original );
 		$decision = Policy::decide( $orig_mime, basename( $original ), array_merge( $s, array( 'keep_token' => '' ) ), $support, $animated );
+		if ( ! empty( $c['color_needed'] ) && in_array( $orig_mime, Policy::MODERN, true ) ) {
+			$decision['convert'] = true;
+			$decision['target_mime'] = $orig_mime;
+		}
 		if ( ! $decision['convert'] && ! $decision['resize_only'] ) {
 			return $metadata;
 		}
@@ -424,6 +490,10 @@ final class Pipeline {
 			}
 		}
 
+		if ( isset( $c['color_token'] ) && Color_Profiles::context_error() ) {
+			return $metadata; // Nested thumbnail generation failed validation: do not delete the source.
+		}
+
 		$final_px = array( (int) ( $metadata['width'] ?? 0 ), (int) ( $metadata['height'] ?? 0 ) );
 		$resized  = $final_px !== $orig_px || '' !== $c['intermediate'];
 		if ( '' !== $c['intermediate'] && ! empty( $metadata['image_meta'] ) ) {
@@ -432,7 +502,7 @@ final class Pipeline {
 		}
 
 		// Never trade a file for a bigger one unless its dimensions also shrank.
-		if ( $file !== $original && ! $resized && wp_filesize( $file ) >= wp_filesize( $original ) && apply_filters( 'lean_uploads_keep_smaller_original', true ) ) {
+		if ( $file !== $original && ! $resized && empty( $c['color_needed'] ) && wp_filesize( $file ) >= wp_filesize( $original ) && apply_filters( 'lean_uploads_keep_smaller_original', true ) ) {
 			self::delete_in_uploads( $file );
 			update_attached_file( $id, $original );
 			$metadata['file']     = _wp_relative_upload_path( $original );

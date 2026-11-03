@@ -34,6 +34,9 @@ final class Notices {
 		if ( ! $uid ) {
 			return; // Nobody to tell; the action hook still fires for logging.
 		}
+		if ( is_wp_error( $detail ) && 0 === strpos( $detail->get_error_code(), 'lean_uploads_color' ) ) {
+			set_transient( self::TRANSIENT . 'color_' . $uid, true, 10 * MINUTE_IN_SECONDS );
+		}
 		$list   = get_transient( self::TRANSIENT . $uid );
 		$list   = is_array( $list ) ? $list : array();
 		$list[] = wp_basename( $filename );
@@ -54,6 +57,11 @@ final class Notices {
 		foreach ( $list as $item ) {
 			printf( '<li><code>%s</code></li>', esc_html( (string) $item ) );
 		}
-		echo '</ul></div>';
+		echo '</ul>';
+		if ( get_transient( self::TRANSIENT . 'color_' . $uid ) ) {
+			delete_transient( self::TRANSIENT . 'color_' . $uid );
+			echo '<p>' . esc_html__( 'Color-profile safeguards blocked at least one operation. A required profile could not be safely processed or verified in the saved image; unsafe fallback was prevented. This checks profile integrity, not visual similarity.', 'lean-uploads' ) . '</p>';
+		}
+		echo '</div>';
 	}
 }

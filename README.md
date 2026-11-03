@@ -14,12 +14,14 @@ So this plugin does that, by default, for everyone, and gives you an escape hatc
 
 - **Converts originals.** JPEG, PNG, BMP, TIFF and HEIC (where the server can decode it) become WebP (or AVIF where the server can encode it). Works for the Media Library, the block editor, the REST API, `media_sideload_image()`, and `wp media import`, because all of them end in the same core function that generates image sizes.
 - **One generation, never two.** WordPress cuts the converted full-size image and every thumbnail from the uploaded original, each one encode away from the source. Only then is the original deleted. Thumbnails are never made from the already-compressed full size.
-- **Caps dimensions, efficiently.** Anything larger than the maximum (default 2560px, the same threshold WordPress uses for its `-scaled` copies) is resampled once, losslessly, to the cap, and everything is derived from that. A 60-megapixel upload is decoded exactly once; on hosts where Imagick cannot hold it, GD does that one decode. Set the cap to 0 to disable.
+- **Caps dimensions, efficiently.** Anything larger than the maximum (default 2560px, the same threshold WordPress uses for its `-scaled` copies) is resampled once, losslessly, to the cap, and everything is derived from that. A 60-megapixel upload is decoded exactly once; on hosts where Imagick cannot hold an untagged image, GD can do that decode. Tagged images never silently fall back to GD. Set the cap to 0 to disable.
 - **Thumbnails in the same format.** Every registered image size is generated as WebP/AVIF at the same quality, including for images that were uploaded before the plugin.
-- **Metadata handled the WordPress way.** EXIF orientation is applied, IPTC/EXIF title, caption and camera data are read into the attachment before the original goes, and the stored files carry no EXIF.
-- **Already-efficient uploads are left alone.** WebP and AVIF are never re-encoded, only resized if they exceed the cap. SVG is never touched. Animated GIFs are never touched.
+- **Color-profile safeguards beyond native WordPress defaults.** Preserves embedded ICC profiles by default through conversion, temporary resized images and generated thumbnails, then reopens saved files to verify the required profile. This addresses profile loss in core PNG resizing and GD processing; unsupported or unsafe operations retain the source and report a failure. It is a targeted safeguard, not a guarantee of identical colors on every screen.
+- **Optional sRGB normalization.** Convert tagged non-sRGB uploads using a real color transform, or normalize selected existing attachments from the Media Library and WP-CLI. Existing-file normalization keeps URLs, formats and dimensions, checks each registered image independently and skips untagged or identified sRGB files.
+- **Metadata handled the WordPress way.** EXIF orientation is applied during upload conversion, and IPTC/EXIF title, caption and camera data are read into the attachment before the original goes. Non-color metadata follows the existing conversion path; same-format color normalization retains existing metadata and orientation.
+- **Already-efficient uploads are left alone.** WebP and AVIF are only re-encoded when they exceed the cap or when opt-in sRGB normalization is needed. SVG is never touched. Animated GIFs are never touched.
 - **An opt-out that teaches.** Put `--keep` anywhere in a file name and that file is stored exactly as uploaded, with the token removed from the saved name. `logo--keep.png` becomes `logo.png`, untouched, and its thumbnails stay PNG too. The attachment is flagged so later regenerations respect it.
-- **Never makes a file bigger.** If the converted file wouldn't be smaller and nothing was resized, the original is kept (filterable). Images above 120 megapixels are left alone rather than risk PHP's limits.
+- **Avoids unnecessary larger files.** If the converted file wouldn't be smaller and nothing was resized or deliberately color-normalized, the original is kept (filterable). Images above 120 megapixels are left alone rather than risk PHP's limits.
 - **Never blocks an upload.** If conversion fails for any reason, the original is kept and the uploader sees a notice saying so.
 - **Media Library integration.** A Format column shows each image's type and size with a one-click Convert link, plus a bulk action for selected images (25 per request; the Tools page is for whole libraries).
 - **Bulk conversion of the existing library**, from Tools > Lean Uploads (scan, then convert in batches with a progress bar, pause and resume, dry run) or from WP-CLI. Each image is its own transaction. Old URLs in posts, meta and options can be rewritten to the new files; that rewrite is serialization-safe and never unserializes stored data (it walks the serialized format and fixes string lengths), so it cannot be used to instantiate objects.
@@ -39,6 +41,7 @@ Under **Settings > Media**. There are intentionally few:
 | WebP quality | 75 | Lossy quality for WebP originals and thumbnails. |
 | AVIF quality | 60 | AVIF's scale differs; 60 looks about like WebP 75. Only applies when AVIF is the output format. |
 | Enforce quality | on | Give Lean Uploads WebP/AVIF quality priority over theme and plugin default-quality filters during its image processing. Turn off for cooperative filter behavior. |
+| Color profiles | preserve | Preserve embedded ICC profiles, or opt into true sRGB conversion when needed. Tagged processing requires Imagick; conversion to sRGB also requires LittleCMS. |
 | Maximum dimension | 2560 px | Longest side. 0 disables. |
 | Source formats | JPEG, PNG, BMP/TIFF on; GIF off | Lossless PNG conversion is available when Imagick is present. |
 | Thumbnails | on | Generate all sizes in the output format. |
@@ -64,17 +67,35 @@ wp lean-uploads convert --all --dry-run
 wp lean-uploads convert --all --update-references
 wp lean-uploads convert --all --limit=50
 wp lean-uploads convert 123 456
+wp lean-uploads normalize-srgb --all --dry-run
+wp lean-uploads normalize-srgb 123 456
 ```
 
 `self-test` pushes generated images through the real upload pipeline into the Media Library, checks the results (format, extension, dimensions, thumbnail formats, opt-out), and deletes everything it created. Run it after activating on a new host.
 
 `scan` is the Tools page summary in text form. `convert` replaces each attachment's file in place, regenerates its sizes, deletes the old files, and with `--update-references` rewrites every old URL (original and each size) to the new one in the site's posts, meta and options; `--limit` stops after that many conversions, handy for doing a large library in sittings. Do a `--dry-run` first and have a backup; this is a one-way door by design. The Tools page does the same thing in batches of five from the browser, and is the better choice for anyone without shell access.
 
+## Color consistency
+
+![Synthetic reference, native WordPress resize, and protected plugin thumbnail](docs/color-consistency.png)
+
+[Reproduce this example and inspect the saved files](docs/color-consistency.md). The native indexed-PNG path shown here loses RGB and alpha precision; the plugin preserves it. This is separate from the missing-profile problem.
+
+The default is **preserve**, not forced sRGB. The optional sRGB mode performs a source-profile-to-sRGB pixel transform through LittleCMS; merely attaching an sRGB label would be incorrect. It applies during new uploads and explicit format conversions. A separate **Normalize colors to sRGB** row action and selected bulk action in the Media Library handle existing files, independently of the automatic setting. The bulk action handles 25 attachments per request; `wp lean-uploads normalize-srgb --all --dry-run` previews an entire library.
+
+Only tagged files needing normalization are processed. Known sRGB profiles are identified by color characteristics, not their name. Untagged files are left untouched, including old thumbnails whose profiles were previously stripped. Nonstandard PNG color declarations without a usable ICC profile are refused rather than silently discarded. Invalid profiles, unsupported profile/container combinations, unavailable color engines and failed saved-profile validation are reported; an unsafe GD fallback is blocked. The upload opt-out remains respected. These safeguards cover plugin-owned processing, not arbitrary third-party image rewrites. ICC-free AVIF/HEIC color declarations (such as NCLX/HDR signaling) are not covered by the ICC-preservation guarantee.
+
+Same-format normalization stages and validates all eligible attachment files before replacing them, with rollback on a handled failure. It preserves PNG/WebP pixels losslessly after the color transform; JPEG and AVIF must be re-encoded (quality 100) and files can grow. Wide-gamut colors outside sRGB may be clipped. Keep external masters and purge any image/CDN caches after normalizing existing URLs. Historical WordPress image-editor backup files are left alone. An interrupted process retains a recovery journal and original files; an administrator must verify or restore those files before clearing the attachment's processing lock.
+
+The specific native-WordPress comparison is profile integrity: [core's PNG resizing excludes ancillary chunks, while GD strips profiles](https://developer.wordpress.org/reference/classes/wp_image_editor_imagick/thumbnail_image/). Lean Uploads explicitly preserves ICC data at save time and validates the saved result. This is not a claim that every WordPress image loses its profile, that every visual change is a profile issue, or that this plugin outperforms other optimizers' color handling. No comparative color test of other plugins has been performed.
+
+Profile validation detects missing or changed required ICC data cheaply. It does **not** compare image appearance. A color-managed pixel comparison can flag suspicious shifts, but needs the exact resize/crop reference and allowances for alpha, lossy encoding and gamut conversion. Such an advisory audit remains a separate future feature, not an automatic rejection rule in this version.
+
 ## Requirements
 
 WordPress 6.5 or newer, PHP 7.4 or newer, and an image library that can write WebP: Imagick or GD, which nearly every host has. AVIF needs a newer Imagick or GD build. The plugin refuses to activate if it can write neither format, rather than silently doing nothing.
 
-It uses WordPress's own image editor for the actual encoding, so it behaves the same as thumbnail generation does on your host and respects the `wp_image_editors` filter. Nothing depends on the web server: no `.htaccess` rules, no nginx config, no CDN cooperation. That's deliberate; hosts that serve static files straight from nginx (WP Engine, among others) break every rewrite-based WebP plugin, and this one doesn't care.
+It uses WordPress's own image editor for the actual encoding, with a protected Imagick editor for tagged images. Untagged processing respects the `wp_image_editors` filter; tagged processing requires the verified color-capable path and does not silently accept a GD-only override. Nothing depends on the web server: no `.htaccess` rules, no nginx config, no CDN cooperation. That's deliberate; hosts that serve static files straight from nginx (WP Engine, among others) break every rewrite-based WebP plugin, and this one doesn't care.
 
 ## Safety properties
 
@@ -92,7 +113,7 @@ It uses WordPress's own image editor for the actual encoding, so it behaves the 
 
 - It doesn't optimize images referenced by URL in pasted HTML. If someone hotlinks a 6000px JPEG from somewhere else, that's still a 6000px JPEG.
 - It doesn't keep the original. That is the point, but read it twice before enabling on a site where someone has been using the Media Library as the only copy of their photos. The `--keep` token and the "Convert uploads" switch are there for the transition.
-- It doesn't strip or preserve metadata beyond what WordPress's editor does by default.
+- It cannot reconstruct a color profile that was already removed, infer the intended colors of an untagged file, or promise color matching between different displays.
 
 ## Development
 

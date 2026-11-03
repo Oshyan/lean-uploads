@@ -114,6 +114,18 @@ final class Library {
 	 * @return array{old_name:string,new_name:string,bytes_before:int,bytes_after:int,urls:array,rows:int}|\WP_Error
 	 */
 	public function convert_attachment( int $id, bool $update_references = false ) {
+		$lock = 'lean_uploads_color_lock_' . $id;
+		if ( ! add_option( $lock, array( 'operation' => 'format', 'started' => time() ), '', false ) ) {
+			return new \WP_Error( 'lean_uploads_busy', 'This attachment is already being processed or needs recovery from an interrupted operation.' );
+		}
+		try {
+			return $this->convert_attachment_locked( $id, $update_references );
+		} finally {
+			delete_option( $lock );
+		}
+	}
+
+	private function convert_attachment_locked( int $id, bool $update_references ) {
 		$info = $this->inspect( $id, true );
 		if ( is_wp_error( $info ) ) {
 			return $info;

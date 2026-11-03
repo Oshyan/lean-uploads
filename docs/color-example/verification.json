@@ -1,0 +1,292 @@
+{
+  "independent_decoder": "Pillow / LittleCMS 2",
+  "source": "Synthetic RGB patches and transparency; custom gamma 1.8 ICC",
+  "expected_srgb_samples": [
+    [
+      193,
+      82,
+      56,
+      255
+    ],
+    [
+      77,
+      167,
+      210,
+      255
+    ],
+    [
+      139,
+      139,
+      139,
+      255
+    ],
+    [
+      77,
+      176,
+      99,
+      128
+    ]
+  ],
+  "results": [
+    {
+      "file": "preserve.png",
+      "dimensions": [
+        400,
+        300
+      ],
+      "icc_bytes": 568,
+      "icc_sha256": "a252139a156d25f59ac511b9b38c8f99becf9216912ae5927332b253bea87faa",
+      "max_sample_rgb_error": 0,
+      "max_sample_alpha_error": 0,
+      "managed_samples": [
+        [
+          193,
+          82,
+          56,
+          255
+        ],
+        [
+          77,
+          167,
+          210,
+          255
+        ],
+        [
+          139,
+          139,
+          139,
+          255
+        ],
+        [
+          77,
+          176,
+          99,
+          128
+        ]
+      ]
+    },
+    {
+      "file": "protected-thumbnail.png",
+      "dimensions": [
+        400,
+        300
+      ],
+      "icc_bytes": 568,
+      "icc_sha256": "a252139a156d25f59ac511b9b38c8f99becf9216912ae5927332b253bea87faa",
+      "max_sample_rgb_error": 0,
+      "max_sample_alpha_error": 0,
+      "managed_samples": [
+        [
+          193,
+          82,
+          56,
+          255
+        ],
+        [
+          77,
+          167,
+          210,
+          255
+        ],
+        [
+          139,
+          139,
+          139,
+          255
+        ],
+        [
+          77,
+          176,
+          99,
+          128
+        ]
+      ]
+    },
+    {
+      "file": "preserve.webp",
+      "dimensions": [
+        400,
+        300
+      ],
+      "icc_bytes": 568,
+      "icc_sha256": "a252139a156d25f59ac511b9b38c8f99becf9216912ae5927332b253bea87faa",
+      "max_sample_rgb_error": 0,
+      "max_sample_alpha_error": 0,
+      "managed_samples": [
+        [
+          193,
+          82,
+          56,
+          255
+        ],
+        [
+          77,
+          167,
+          210,
+          255
+        ],
+        [
+          139,
+          139,
+          139,
+          255
+        ],
+        [
+          77,
+          176,
+          99,
+          128
+        ]
+      ]
+    },
+    {
+      "file": "preserve.avif",
+      "dimensions": [
+        400,
+        300
+      ],
+      "icc_bytes": 568,
+      "icc_sha256": "a252139a156d25f59ac511b9b38c8f99becf9216912ae5927332b253bea87faa",
+      "max_sample_rgb_error": 1,
+      "max_sample_alpha_error": 0,
+      "managed_samples": [
+        [
+          193,
+          82,
+          56,
+          255
+        ],
+        [
+          77,
+          167,
+          210,
+          255
+        ],
+        [
+          139,
+          139,
+          139,
+          255
+        ],
+        [
+          78,
+          176,
+          99,
+          128
+        ]
+      ]
+    },
+    {
+      "file": "normalized.png",
+      "dimensions": [
+        800,
+        600
+      ],
+      "icc_bytes": 588,
+      "icc_sha256": "e7ba6537533fa4252a2b5a7b8ed2c49125cd0a1423b530e4fffae5392dcbf182",
+      "max_sample_rgb_error": 0,
+      "max_sample_alpha_error": 0,
+      "managed_samples": [
+        [
+          193,
+          82,
+          56,
+          255
+        ],
+        [
+          77,
+          167,
+          210,
+          255
+        ],
+        [
+          139,
+          139,
+          139,
+          255
+        ],
+        [
+          77,
+          176,
+          99,
+          128
+        ]
+      ]
+    },
+    {
+      "file": "native-imagick.png",
+      "dimensions": [
+        400,
+        300
+      ],
+      "icc_bytes": 568,
+      "icc_sha256": "a252139a156d25f59ac511b9b38c8f99becf9216912ae5927332b253bea87faa",
+      "max_sample_rgb_error": 56,
+      "max_sample_alpha_error": 42,
+      "managed_samples": [
+        [
+          184,
+          104,
+          0,
+          255
+        ],
+        [
+          104,
+          184,
+          184,
+          255
+        ],
+        [
+          104,
+          104,
+          104,
+          255
+        ],
+        [
+          104,
+          184,
+          104,
+          170
+        ]
+      ]
+    },
+    {
+      "file": "native-gd.png",
+      "dimensions": [
+        400,
+        300
+      ],
+      "icc_bytes": 0,
+      "icc_sha256": null,
+      "max_sample_rgb_error": 19,
+      "max_sample_alpha_error": 1,
+      "managed_samples": [
+        [
+          180,
+          65,
+          42,
+          255
+        ],
+        [
+          60,
+          150,
+          200,
+          255
+        ],
+        [
+          120,
+          120,
+          120,
+          255
+        ],
+        [
+          60,
+          160,
+          80,
+          129
+        ]
+      ]
+    }
+  ],
+  "limitations": "Compares four interior patch samples; not a whole-image visual-difference threshold or broad real-photo corpus."
+}

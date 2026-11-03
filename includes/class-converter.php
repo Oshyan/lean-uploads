@@ -36,6 +36,16 @@ final class Converter {
 	 * @return array{path:string,width:int,height:int,mime:string,bytes_before:int,bytes_after:int,resized:bool}|\WP_Error
 	 */
 	public function convert( string $source, string $dest, string $target_mime, array $opts ) {
+		$mode = (string) ( $opts['color_mode'] ?? $this->settings->get()['color_mode'] ?? 'preserve' );
+		$token = Color_Profiles::push_context( $source, $mode );
+		try {
+			if ( Color_Profiles::context_error() ) { return Color_Profiles::context_error(); }
+			return $this->convert_in_context( $source, $dest, $target_mime, $opts );
+		} finally { Color_Profiles::pop_context( $token ); }
+	}
+
+	/** All encode paths execute inside the same scoped color policy. */
+	private function convert_in_context( string $source, string $dest, string $target_mime, array $opts ) {
 		$quality  = (int) ( $opts['quality'] ?? 75 );
 		$max      = (int) ( $opts['max_dimension'] ?? 0 );
 		$lossless = ! empty( $opts['lossless'] );
@@ -74,6 +84,7 @@ final class Converter {
 				// to the editor path on any failure.
 				$result = $this->convert_direct_imagick( $source, $dest, $target_mime, $quality, $max, 'image/jpeg' === $src_mime );
 				if ( is_wp_error( $result ) ) {
+					if ( Color_Profiles::context_error() ) { return Color_Profiles::context_error(); }
 					$result = null;
 				}
 			}
@@ -88,6 +99,7 @@ final class Converter {
 		if ( is_wp_error( $result ) ) {
 			return $result;
 		}
+		if ( Color_Profiles::context_error() ) { return Color_Profiles::context_error(); }
 
 		// Trust nothing: verify the file on disk is what we meant to write.
 		clearstatcache( true, $dest );
@@ -100,6 +112,8 @@ final class Converter {
 			return new \WP_Error( 'lean_uploads_bad_output', sprintf( 'Encoder produced %s instead of %s.', $mime ? $mime : 'nothing', $target_mime ) );
 		}
 		$dims = wp_getimagesize( $dest );
+		$color = Color_Profiles::validate_file( $dest, Color_Profiles::expected_profile() );
+		if ( is_wp_error( $color ) ) { return $color; }
 
 		return array(
 			'path'         => $dest,
@@ -148,7 +162,7 @@ final class Converter {
 		if ( ! class_exists( 'WP_Image_Editor_GD', false ) && function_exists( '_wp_image_editor_choose' ) ) {
 			_wp_image_editor_choose(); // loads the core editor classes; they are not autoloaded
 		}
-		$classes = apply_filters( 'wp_image_editors', array( 'WP_Image_Editor_Imagick', 'WP_Image_Editor_GD' ) );
+		$classes = Color_Profiles::filter_editors( apply_filters( 'wp_image_editors', array( 'WP_Image_Editor_Imagick', 'WP_Image_Editor_GD' ) ) );
 		$usable  = array();
 		foreach ( (array) $classes as $class ) {
 			if ( is_string( $class ) && class_exists( $class ) && is_callable( array( $class, 'test' ) )
@@ -213,6 +227,9 @@ final class Converter {
 			if ( is_wp_error( $editor ) ) {
 				return $editor;
 			}
+			if ( '' !== Color_Profiles::expected_profile() && ! $editor instanceof Color_Editor_Imagick ) {
+				return Color_Profiles::fail( new \WP_Error( 'lean_uploads_color_editor', 'A later filter selected an editor that cannot guarantee profile preservation.' ) );
+			}
 			if ( method_exists( $editor, 'maybe_exif_rotate' ) ) {
 				$editor->maybe_exif_rotate();
 			}
@@ -265,6 +282,8 @@ final class Converter {
 			$im->setOption( 'jpeg:size', $max . 'x' . $max );
 		}
 		$im->readImage( $source );
+		$expected_profile = Color_Profiles::prepare_image( $im );
+		if ( is_wp_error( $expected_profile ) ) { $im->clear(); return $expected_profile; }
 		if ( method_exists( $im, 'autoOrient' ) ) {
 			$im->autoOrient();
 		}
@@ -281,14 +300,14 @@ final class Converter {
 			$im->setImageCompressionQuality( $quality );
 		}
 		// Drop EXIF/IPTC/XMP like core does, but keep the colour profile so wide-gamut sources don't shift.
-		$icc = $im->getImageProfiles( 'icc', true );
 		$im->stripImage();
-		if ( ! empty( $icc['icc'] ) ) {
-			$im->profileImage( 'icc', $icc['icc'] );
+		if ( '' !== $expected_profile ) {
+			$im->setImageProfile( 'icc', $expected_profile );
 		}
+		Color_Profiles::prepare_save( $im, $expected_profile );
 		$ok = $im->writeImage( $dest );
 		$im->clear();
-		return $ok ? true : new \WP_Error( 'lean_uploads_imagick_write', 'Imagick could not write the file.' );
+		return $ok ? Color_Profiles::validate_file( $dest, $expected_profile ) : new \WP_Error( 'lean_uploads_imagick_write', 'Imagick could not write the file.' );
 	}
 
 	/**
@@ -297,6 +316,8 @@ final class Converter {
 	 */
 	private function convert_lossless_imagick( string $source, string $dest, ?array $fit ) {
 		$im = new \Imagick( $source );
+		$expected_profile = Color_Profiles::prepare_image( $im );
+		if ( is_wp_error( $expected_profile ) ) { $im->clear(); return $expected_profile; }
 		if ( method_exists( $im, 'autoOrient' ) ) {
 			$im->autoOrient();
 		}
@@ -306,8 +327,9 @@ final class Converter {
 		$im->setImageFormat( 'WEBP' );
 		$im->setOption( 'webp:lossless', 'true' );
 		$im->setOption( 'webp:method', '6' );
+		Color_Profiles::prepare_save( $im, $expected_profile );
 		$ok = $im->writeImage( $dest );
 		$im->clear();
-		return $ok ? true : new \WP_Error( 'lean_uploads_imagick_write', 'Imagick could not write the WebP file.' );
+		return $ok ? Color_Profiles::validate_file( $dest, $expected_profile ) : new \WP_Error( 'lean_uploads_imagick_write', 'Imagick could not write the WebP file.' );
 	}
 }

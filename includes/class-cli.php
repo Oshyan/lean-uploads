@@ -255,6 +255,68 @@ final class CLI {
 		}
 	}
 
+	/**
+	 * Converts embedded non-sRGB profiles to sRGB, preserving file URLs, dimensions and formats.
+	 *
+	 * Untagged files and files already identified as sRGB are left untouched. This cannot repair an old
+	 * thumbnail whose source profile was already discarded. Back up files before rewriting lossy formats.
+	 *
+	 * ## OPTIONS
+	 *
+	 * [<id>...]
+	 * : Attachment IDs.
+	 *
+	 * [--all]
+	 * : Inspect every image attachment.
+	 *
+	 * [--dry-run]
+	 * : List eligible files without changing anything.
+	 *
+	 * ## EXAMPLES
+	 *
+	 *     wp lean-uploads normalize-srgb --all --dry-run
+	 *     wp lean-uploads normalize-srgb 123 456
+	 *
+	 * @subcommand normalize-srgb
+	 */
+	public function normalize_srgb( array $args, array $assoc_args ): void {
+		$ids = array_values( array_unique( array_map( 'intval', $args ) ) );
+		if ( isset( $assoc_args['all'] ) ) {
+			$ids = array_map( 'intval', (array) get_posts( array( 'post_type' => 'attachment', 'post_status' => 'any', 'post_mime_type' => 'image', 'posts_per_page' => -1, 'fields' => 'ids', 'orderby' => 'ID', 'order' => 'ASC' ) ) );
+		}
+		if ( ! $ids ) {
+			\WP_CLI::error( 'Nothing to do. Pass attachment IDs or --all.' );
+		}
+		$dry = isset( $assoc_args['dry-run'] );
+		$service = new Color_Library();
+		$done = 0; $skipped = 0; $failed = 0;
+		foreach ( $ids as $id ) {
+			$result = $dry ? $service->inspect( $id ) : $service->normalize_attachment( $id );
+			if ( is_wp_error( $result ) ) {
+				if ( 'skip' === $result->get_error_code() ) {
+					++$skipped;
+					\WP_CLI::log( "#$id skipped: " . $result->get_error_message() );
+				} else {
+					++$failed;
+					\WP_CLI::warning( "#$id: " . $result->get_error_message() );
+				}
+				continue;
+			}
+			$count = $dry ? count( $result['convert'] ) : $result['converted'];
+			$untagged = $dry ? count( array_filter( $result['skipped'], static function ( $reason ) { return 'untagged' === $reason; } ) ) : $result['untagged'];
+			$done += $count;
+			if ( ! $count ) {
+				++$skipped;
+			}
+			\WP_CLI::log( sprintf( '%s#%d: %d image files %s; %d untagged files left unchanged.', $dry ? '[dry] ' : '', $id, $count, $dry ? 'would be normalized' : 'normalized', $untagged ) );
+		}
+		$message = sprintf( '%d image files %s, %d attachments skipped, %d failed.', $done, $dry ? 'would be normalized' : 'normalized', $skipped, $failed );
+		if ( $failed ) {
+			\WP_CLI::error( $message );
+		}
+		\WP_CLI::success( $message );
+	}
+
 	/* ------------------------------------------------------------ test image factories */
 
 	private function make_png( $path, int $w, int $h, bool $alpha, array &$created ) {
