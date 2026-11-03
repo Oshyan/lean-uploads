@@ -34,6 +34,7 @@ final class Settings {
 			'format'        => 'webp',
 			'webp_quality'  => 75,
 			'avif_quality'  => 60,
+			'enforce_quality' => true,
 			'max_dimension' => 2560,
 			'convert_jpeg'  => true,
 			'convert_png'   => true,
@@ -96,6 +97,7 @@ final class Settings {
 			'format'        => ( isset( $input['format'] ) && 'avif' === $input['format'] ) ? 'avif' : 'webp',
 			'webp_quality'  => $clamp( 'webp_quality', 1, 100 ),
 			'avif_quality'  => $clamp( 'avif_quality', 1, 100 ),
+			'enforce_quality' => $bool( 'enforce_quality' ),
 			'max_dimension' => $clamp( 'max_dimension', 0, 20000 ),
 			'convert_jpeg'  => $bool( 'convert_jpeg' ),
 			'convert_png'   => $bool( 'convert_png' ),
@@ -137,6 +139,7 @@ final class Settings {
 			'format'        => __( 'Output format', 'lean-uploads' ),
 			'webp_quality'  => __( 'WebP quality', 'lean-uploads' ),
 			'avif_quality'  => __( 'AVIF quality', 'lean-uploads' ),
+			'enforce_quality' => __( 'Quality priority', 'lean-uploads' ),
 			'max_dimension' => __( 'Maximum dimension', 'lean-uploads' ),
 			'types'         => __( 'Source formats', 'lean-uploads' ),
 			'derivatives'   => __( 'Thumbnails', 'lean-uploads' ),
@@ -155,7 +158,7 @@ final class Settings {
 	 */
 	public static function sanitize_form( $input ): array {
 		$input = is_array( $input ) ? $input : array();
-		foreach ( array( 'enabled', 'convert_jpeg', 'convert_png', 'png_lossless', 'convert_gif', 'convert_other', 'derivatives' ) as $k ) {
+		foreach ( array( 'enabled', 'enforce_quality', 'convert_jpeg', 'convert_png', 'png_lossless', 'convert_gif', 'convert_other', 'derivatives' ) as $k ) {
 			if ( ! array_key_exists( $k, $input ) ) {
 				$input[ $k ] = false;
 			}
@@ -234,6 +237,10 @@ final class Settings {
 		$avif_ok = $this->caps->supports( 'image/avif' );
 		$this->number( 'avif_quality', 1, 100, '', ! $avif_ok );
 		echo '<p class="description">' . esc_html__( 'AVIF uses a different scale: 60 looks about like WebP 75. Only applies when AVIF is the output format.', 'lean-uploads' ) . '</p>';
+	}
+
+	public function field_enforce_quality(): void {
+		$this->checkbox( 'enforce_quality', __( 'Enforce Lean Uploads quality over theme and plugin filters', 'lean-uploads' ), __( 'Enabled by default for WebP and AVIF processing. Turn off to let later WordPress quality filters override these settings. JPEG quality, explicit lossless encoding and unrelated image edits are not changed.', 'lean-uploads' ) );
 	}
 
 	public function field_max_dimension(): void {

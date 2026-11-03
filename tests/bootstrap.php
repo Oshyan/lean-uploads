@@ -13,3 +13,5 @@ const OPTION = 'lean_uploads';
 require_once dirname( __DIR__ ) . '/includes/class-policy.php';
 require_once dirname( __DIR__ ) . '/includes/class-settings.php';
 require_once dirname( __DIR__ ) . '/includes/class-rewriter.php';
+require_once dirname( __DIR__ ) . '/includes/class-capabilities.php';
+require_once dirname( __DIR__ ) . '/includes/class-pipeline.php';

@@ -4,7 +4,7 @@ Tags: webp, avif, images, optimization, uploads
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.3.1
+Stable tag: 0.4.0
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -48,6 +48,11 @@ Not automatically. Go to Tools > Lean Uploads, click Scan, tick Dry run and Star
 75 is the default and is visually transparent for photos. Raise it if you are picky, lower it if you are not.
 
 == Changelog ==
+
+= 0.4.0 =
+* Default-on quality enforcement with an opt-out under Settings > Media, scoped to WebP/AVIF processing. JPEG quality and unrelated image edits are unchanged.
+* Preserve explicit fallback-conversion quality across WordPress format changes and retain lossless conversion intent.
+* Add unit and WordPress integration coverage for quality precedence.
 
 = 0.3.1 =
 * Fixes from a second security review: new uploads never reuse the base name of a converted earlier upload (core only checks the uploaded extension, so thumbnails could be overwritten); oversized originals are moved aside and put back if a conversion fails; originals are kept when no thumbnails can be generated; bulk conversion of core-scaled attachments converts from the true original; URL rewriting is bounded, boundary-aware and limited to upload URLs; bulk runs take a lock and save progress per image.

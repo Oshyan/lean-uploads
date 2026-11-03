@@ -38,12 +38,15 @@ Under **Settings > Media**. There are intentionally few:
 | Output format | WebP | AVIF is offered when the server's image library can write it, and is only used if you choose it. Falls back to WebP if it turns out to be unavailable. |
 | WebP quality | 75 | Lossy quality for WebP originals and thumbnails. |
 | AVIF quality | 60 | AVIF's scale differs; 60 looks about like WebP 75. Only applies when AVIF is the output format. |
+| Enforce quality | on | Give Lean Uploads WebP/AVIF quality priority over theme and plugin default-quality filters during its image processing. Turn off for cooperative filter behavior. |
 | Maximum dimension | 2560 px | Longest side. 0 disables. |
 | Source formats | JPEG, PNG, BMP/TIFF on; GIF off | Lossless PNG conversion is available when Imagick is present. |
 | Thumbnails | on | Generate all sizes in the output format. |
 | Opt-out token | `--keep` | Empty disables the escape hatch. |
 
 Developers get filters `lean_uploads_settings` (override any setting in code), `lean_uploads_keep_smaller_original` and `lean_uploads_max_pixels`, and actions `lean_uploads_converted` (an upload's original was replaced), `lean_uploads_attachment_converted` (an existing attachment was converted, with the old/new URL pairs) and `lean_uploads_failed`.
+
+Quality enforcement applies to uploads, generated sizes and bulk conversions. It does not alter JPEG quality or unrelated image editors. Explicit operation-specific quality wins over the site default; lossless PNG conversion and WordPress's lossless WebP handling retain their lossless intent. With enforcement off, later WordPress filters may override quality, including when a fallback conversion switches formats. Direct Imagick operations still use their explicit encoder settings. This is filter precedence, not protection against code that re-encodes images itself or installs a competing final filter during processing. Existing files are not re-encoded just by changing the setting.
 
 Uninstalling removes the plugin's options, on every site of a network. Converted images stay converted; there is nothing to restore them from.
 
@@ -98,7 +101,9 @@ composer install
 composer test
 ```
 
-Unit tests cover the decision logic, settings sanitization and the URL rewriter without needing a WordPress install. Against a real site there is `wp lean-uploads self-test`, plus two WP-CLI scripts in `tests/integration/` that exercise the upload, bulk and rewrite paths end to end (they create their own fixtures and delete only those).
+Unit tests cover decision logic, settings sanitization, quality policy and the URL rewriter without needing a WordPress install. Against a real site there is `wp lean-uploads self-test`, plus WP-CLI scripts in `tests/integration/` that exercise upload, bulk and rewrite paths end to end (they create their own fixtures and delete only those).
+
+Run `wp eval-file wp-content/plugins/lean-uploads/tests/integration/verify-quality.php` on an Imagick test site to check quality precedence, opt-out, full-size and thumbnail encoding, bulk conversion, explicit fallback quality and lossless behavior. It creates and removes its own fixtures and never saves settings. It reports a skip if the required encoder is unavailable.
 
 ## Status
 

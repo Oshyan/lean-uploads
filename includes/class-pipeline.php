@@ -63,6 +63,7 @@ final class Pipeline {
 	public function register_hooks(): void {
 		add_filter( 'image_editor_output_format', array( $this, 'output_format' ), 20, 3 );
 		add_filter( 'wp_editor_set_quality', array( $this, 'quality' ), 20, 2 );
+		add_filter( 'wp_editor_set_quality', array( $this, 'enforce_quality' ), PHP_INT_MAX, 2 );
 		add_action( 'add_attachment', array( $this, 'note_new_attachment' ) );
 		add_filter( 'big_image_size_threshold', array( $this, 'begin_attachment' ), 1, 4 );
 		add_filter( 'wp_generate_attachment_metadata', array( $this, 'finalize' ), PHP_INT_MAX - 10, 3 );
@@ -156,6 +157,9 @@ final class Pipeline {
 			return $threshold; // the nested regeneration in convert_full_myself(); the outer record stays in charge
 		}
 		self::end_attachment();
+		// Register last again now that themes and late-initializing plugins have loaded.
+		remove_filter( 'wp_editor_set_quality', array( $this, 'enforce_quality' ), PHP_INT_MAX );
+		add_filter( 'wp_editor_set_quality', array( $this, 'enforce_quality' ), PHP_INT_MAX, 2 );
 		$attachment_id = (int) $attachment_id;
 		$file          = (string) $file;
 		$kept          = $attachment_id && ( get_post_meta( $attachment_id, self::KEEP_META, true ) || in_array( $file, self::$kept_paths, true ) );
@@ -317,8 +321,25 @@ final class Pipeline {
 	 * @return int
 	 */
 	public function quality( $quality, $mime ) {
+		$s = $this->settings->get();
+		$c = self::$current;
+		// Only attachment work we own (including opted-in thumbnails), never unrelated editors.
+		if ( ! $c || $c['kept'] || ( empty( $s['derivatives'] ) && ( ! $c['intended'] || empty( $s['enabled'] ) ) ) ) {
+			return $quality;
+		}
 		$q = $this->settings->quality_for( (string) $mime );
-		return null === $q ? $quality : $q;
+		if ( null === $q ) {
+			return $quality; // In particular, leave JPEG and lossless PNG intermediates alone.
+		}
+		if ( 'image/webp' === $mime && 'image/png' === $c['source_mime'] && ! empty( $s['png_lossless'] ) && $this->caps->imagick_can_write( 'WEBP' ) ) {
+			return 100; // Imagick's WebP encoder uses lossless mode at quality 100.
+		}
+		return $q;
+	}
+
+	/** Final default-quality policy; explicit WP_Image_Editor::set_quality($number) bypasses this hook. */
+	public function enforce_quality( $quality, $mime ) {
+		return ! empty( $this->settings->get()['enforce_quality'] ) ? $this->quality( $quality, $mime ) : $quality;
 	}
 
 	/* ------------------------------------------------------------------ finishing the job */

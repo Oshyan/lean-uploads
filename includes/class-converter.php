@@ -18,8 +18,12 @@ final class Converter {
 	/** @var Capabilities */
 	private $caps;
 
-	public function __construct( Capabilities $caps ) {
+	/** @var Settings */
+	private $settings;
+
+	public function __construct( Capabilities $caps, ?Settings $settings = null ) {
 		$this->caps = $caps;
+		$this->settings = $settings ?? new Settings( $caps );
 	}
 
 	/**
@@ -63,7 +67,7 @@ final class Converter {
 			$result   = null;
 			$src_mime = (string) ( $size['mime'] ?? '' );
 			$too_big  = $this->exceeds_imagick_cache( (int) $size[0], (int) $size[1] );
-			if ( null !== $fit && $this->caps->has_imagick() && ( 'image/jpeg' === $src_mime || ! $too_big ) ) {
+			if ( ! $lossless && null !== $fit && $this->caps->has_imagick() && ( 'image/jpeg' === $src_mime || ! $too_big ) ) {
 				// Direct Imagick for resizes: JPEGs are decoded already downscaled (libjpeg DCT scaling, which also
 				// sidesteps the pixel-cache limit), and PNG output uses fast compression since an intermediate is
 				// temporary. The core editor would write PNG at level 9 and take four times as long. Falls through
@@ -156,6 +160,28 @@ final class Converter {
 		return $usable;
 	}
 
+	/** Try supported editors in core's order, preferring GD when Imagick cannot hold the source. */
+	private function convert_with_editor( string $source, string $dest, string $target_mime, int $quality, ?array $fit, int $width, int $height ) {
+		$classes = $this->editor_classes( $target_mime );
+		if ( $this->exceeds_imagick_cache( $width, $height ) ) {
+			usort( $classes, static function ( $a, $b ) {
+				return (int) ( false !== stripos( $a, 'imagick' ) ) - (int) ( false !== stripos( $b, 'imagick' ) );
+			} );
+		}
+		$result = new \WP_Error( 'lean_uploads_no_editor', 'No image editor can write the requested format.' );
+		foreach ( $classes as $class ) {
+			try {
+				$result = $this->convert_with_editor_class( $class, $source, $dest, $target_mime, $quality, $fit );
+			} catch ( \Throwable $e ) {
+				$result = new \WP_Error( 'lean_uploads_editor_exception', $e->getMessage() );
+			}
+			if ( ! is_wp_error( $result ) ) {
+				return $result;
+			}
+		}
+		return $result;
+	}
+
 	/**
 	 * @param array{0:int,1:int}|null $fit
 	 * @return true|\WP_Error
@@ -169,6 +195,17 @@ final class Converter {
 		$no_mapping = static function () {
 			return array();
 		};
+		// Core resets quality when save() changes format. Preserve the operation's explicit quality,
+		// not the site default, across that reset. Opting out retains cooperative filter behavior.
+		$s = $this->settings->get();
+		$enforce = ! empty( $s['enforce_quality'] ) && ( ! empty( $s['enabled'] ) || ! empty( $s['derivatives'] ) )
+			&& in_array( $target_mime, Policy::MODERN, true );
+		$operation_quality = static function ( $incoming, $mime ) use ( $target_mime, $quality ) {
+			return $mime === $target_mime ? $quality : $incoming;
+		};
+		if ( $enforce ) {
+			add_filter( 'wp_editor_set_quality', $operation_quality, PHP_INT_MAX, 2 );
+		}
 		add_filter( 'wp_image_editors', $only, PHP_INT_MAX );
 		add_filter( 'image_editor_output_format', $no_mapping, PHP_INT_MAX );
 		try {
@@ -190,6 +227,9 @@ final class Converter {
 			$editor->set_quality( $quality );
 			$saved = $editor->save( $dest, $target_mime );
 		} finally {
+			if ( $enforce ) {
+				remove_filter( 'wp_editor_set_quality', $operation_quality, PHP_INT_MAX );
+			}
 			remove_filter( 'wp_image_editors', $only, PHP_INT_MAX );
 			remove_filter( 'image_editor_output_format', $no_mapping, PHP_INT_MAX );
 		}

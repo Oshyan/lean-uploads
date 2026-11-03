@@ -13,6 +13,7 @@ final class SettingsTest extends TestCase {
 		$this->assertSame( 'webp', $d['format'] );
 		$this->assertSame( 75, $d['webp_quality'] );
 		$this->assertSame( 60, $d['avif_quality'] );
+		$this->assertTrue( $d['enforce_quality'] );
 		$this->assertSame( 2560, $d['max_dimension'] );
 		$this->assertTrue( $d['convert_png'] );
 		$this->assertTrue( $d['convert_jpeg'] );
@@ -68,9 +69,15 @@ final class SettingsTest extends TestCase {
 		$this->assertSame( 70, $s['webp_quality'] );
 
 		$s = Settings::sanitize_form( 'not-an-array' );
-		foreach ( array( 'enabled', 'convert_jpeg', 'convert_png', 'png_lossless', 'convert_gif', 'convert_other', 'derivatives' ) as $k ) {
+		foreach ( array( 'enabled', 'enforce_quality', 'convert_jpeg', 'convert_png', 'png_lossless', 'convert_gif', 'convert_other', 'derivatives' ) as $k ) {
 			$this->assertFalse( $s[ $k ], "$k should be off when the form omits it" );
 		}
 		$this->assertSame( 'webp', $s['format'] );
+	}
+
+	public function test_quality_enforcement_migrates_and_accepts_opt_out(): void {
+		$this->assertTrue( Settings::sanitize( array( 'webp_quality' => 85 ) )['enforce_quality'] );
+		$this->assertFalse( Settings::sanitize( array( 'enforce_quality' => 'false' ) )['enforce_quality'] );
+		$this->assertTrue( Settings::sanitize_form( array( 'enforce_quality' => '1' ) )['enforce_quality'] );
 	}
 }

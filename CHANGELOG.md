@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.4.0
+
+- Default-on quality enforcement for WebP/AVIF processing prevents theme quality filters from silently replacing configured quality; Settings > Media provides an opt-out. JPEG quality and unrelated image editors are untouched.
+- Fallback conversions preserve operation-specific quality when WordPress resets quality while changing output format, with the same opt-out.
+- Restore the missing editor-selection driver used by fallback conversions, including trying another supported editor on failure.
+- Preserve lossless PNG-to-WebP intent during core encoding and direct resized conversions.
+- Add quality-policy unit coverage and a self-cleaning WordPress integration verifier.
+
 ## 0.3.1
 
 Second security review; everything it found is fixed here.
