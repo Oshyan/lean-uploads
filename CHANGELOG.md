@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.5.1
+
+- Make color regression checks portable across ImageMagick versions: tolerate one level of color-transform rounding while checking alpha exactly, and verify indexed-PNG pixel precision independently of the decoder’s reported depth.
+- Explicitly verify safe refusal and original retention when an AVIF encoder cannot retain ICC profiles.
+- Plugin behavior and defaults are unchanged from 0.5.0.
+
 ## 0.5.0
 
 - Preserve embedded ICC profiles by default across plugin conversion, temporary resizes and generated sizes; verify saved profiles and block unsafe GD fallback.

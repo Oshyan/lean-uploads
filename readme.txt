@@ -4,7 +4,7 @@ Tags: webp, avif, images, optimization, uploads
 Requires at least: 6.5
 Tested up to: 7.1
 Requires PHP: 7.4
-Stable tag: 0.5.0
+Stable tag: 0.5.1
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
@@ -50,6 +50,10 @@ Not automatically. Go to Tools > Lean Uploads, click Scan, tick Dry run and Star
 75 is the default and is visually transparent for photos. Raise it if you are picky, lower it if you are not.
 
 == Changelog ==
+
+= 0.5.1 =
+* Make color regression checks portable across ImageMagick versions, including verified safe refusal when an AVIF encoder cannot retain ICC profiles.
+* Plugin behavior and defaults are unchanged from 0.5.0.
 
 = 0.5.0 =
 * Default ICC preservation and saved-file verification, including intermediates and thumbnails; block unsafe GD fallback.
